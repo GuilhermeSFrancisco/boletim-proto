@@ -328,3 +328,10 @@ header.top .hbtns .nav.undo { font-size: 13px; min-width: 0; padding: 0 8px; gap
 /* take box: the + sits on the label line, the arrows and number below it (they overlapped on the iPhone) */
 .takebox .tline { margin-top: 34px; }
 .tr.sst .takebox { min-height: 118px; }
+/* the scene · shot · take row only as tall as the take box needs: label line with the +, then ‹ number › */
+.tr.sst .takebox { min-height: 0; }
+.tr.sst .tf.big { min-height: 96px; }
+.takebox .lbl { display: flex; align-items: center; min-height: 30px; }
+.takebox .tline { margin-top: 4px; }
+.takebox .tnav { height: 40px; }
+.takebox .tno { font-size: 32px; }
