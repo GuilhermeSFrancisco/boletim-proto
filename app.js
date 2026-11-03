@@ -529,12 +529,13 @@ function renderTake(t) {
         <span class="plus" data-add="roll" role="button" aria-label="New roll">+</span></div>`]) +
     row('', [fieldHTML(t, 'scene', true, '<span class="plus" data-add="scene" role="button" aria-label="New scene">+</span>'),
       fieldHTML(t, 'shot', true, '<span class="plus" data-add="shot" role="button" aria-label="New shot">+</span>'), takeBox]).replace('class="tr c3"', 'class="tr sst"') +
-    (t.scene ? `<div class="tr c1"><button class="scdesc" data-scdesc><span class="lbl">Scene ${h(t.scene)}</span><span>${h(sd || 'Add a scene description')}</span></button></div>` : '') +
+    (t.scene && sd ? `<div class="tr c1"><button class="scdesc" data-scdesc><span class="lbl">Scene ${h(t.scene)}</span><span>${h(sd)}</span></button></div>` : '') +
     row('', CAMSET.map(k => fieldHTML(t, k))) +
     row('', ['lens', 'stop', 'filters'].map(k => fieldHTML(t, k, true))) +
     row('', ['focus', 'height', 'tilt'].map(k => fieldHTML(t, k, true))) +
     row('', ['lut', 'tc'].map(k => fieldHTML(t, k))) +
-    row('', [fieldHTML(t, 'desc')]) + row('', [fieldHTML(t, 'notes')]) + prevNote;
+    row('', [fieldHTML(t, 'desc')]) + row('', [fieldHTML(t, 'notes')]) + prevNote +
+    `<div class="tr c1"><button class="fieldsbtn" data-fields>Fields on this page ›</button></div>`;
 
   document.querySelectorAll('#tp [data-f]').forEach(b => b.onclick = ev => {
     if (ev.target.closest('[data-add],[data-nav]')) return;
@@ -545,10 +546,8 @@ function renderTake(t) {
   document.querySelectorAll('#tp [data-nav]').forEach(b => b.onclick = () => { const n = list[i + Number(b.dataset.nav)]; if (n) go('t/' + n.id + (active && active !== 'take' ? '/' + active : '')); });
   document.querySelectorAll('#tp [data-add]').forEach(b => b.onclick = ev => { ev.stopPropagation(); doAdd(t, b.dataset.add); });
   const pn = $('#tp [data-prevnote]'); if (pn) pn.onclick = () => { checkpoint('repeat note'); t.notes = p.notes; save(); renderTake(t); };
-  const scd = $('#tp [data-scdesc]'); if (scd) scd.onclick = () => {
-    const v = prompt('Scene ' + t.scene + ' · description (whole scene)', sd || ''); if (v == null) return;
-    checkpoint('scene description'); if (v.trim()) S.sceneDesc[t.scene] = v.trim(); else delete S.sceneDesc[t.scene]; save(); renderTake(t);
-  };
+  const scd = $('#tp [data-scdesc]'); if (scd) scd.onclick = () => sceneDescPrompt(t);
+  $('#tp [data-fields]').onclick = () => fieldsSheet(() => renderTake(t));
   takeToolbar(t);
 }
 function doAdd(t, what) {
@@ -573,6 +572,20 @@ function insertSheet(t, last) {   // + Take on a take that isn't the camera's la
     el.querySelector('#ins').onclick = () => { checkpoint('insert take'); closeSheet(); const n = addTake(at, true); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))} inserted`); go('t/' + n.id); };
     el.querySelector('#end').onclick = () => { checkpoint('+ take'); closeSheet(); const n = addTake(at); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))}`); go('t/' + n.id); };
   });
+}
+
+function sceneDescPrompt(t) {
+  const v = prompt('Scene ' + t.scene + ' · description (whole scene)', S.sceneDesc[t.scene] || ''); if (v == null) return;
+  checkpoint('scene description'); if (v.trim()) S.sceneDesc[t.scene] = v.trim(); else delete S.sceneDesc[t.scene]; save(); renderTake(t);
+}
+const fieldsHTML = () => `<div class="checks">${HIDEABLE.map(k => `<button class="chip ${visible(k) ? 'on' : ''}" data-hide="${k}">${visible(k) ? '✓ ' : ''}${F[k].label}</button>`).join('')}</div>`;
+function bindFields(root, again) {
+  root.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => { const k = b.dataset.hide; checkpoint('fields');
+    S.hidden = visible(k) ? [...S.hidden, k] : S.hidden.filter(x => x !== k); save(); again(); });
+}
+function fieldsSheet(after) {   // which fields the take page shows, changed where you see them (also in Setup)
+  sheet('Fields on the take page', `<p>Tap to show or hide. Scene, shot, take, lens, stop, filter and notes always show; a scene description shows when there is one.</p>${fieldsHTML()}`,
+    el => bindFields(el, () => { after(); fieldsSheet(after); }));
 }
 
 function takeToolbar(t) {   // the big + Take stays at the bottom, in reach of the thumb; Repeat shows above it while there is grey
@@ -675,7 +688,8 @@ function panelValue(t, k) {
   if (s != null && !has(t, k)) top = `<button class="chip last" data-same>Last: ${h(show(k, s))}</button>`;
   if (k === 'notes') { const p = prevTake(t); if (p && p.notes && p.notes !== t.notes) top = `<button class="chip last" data-prevnote>= Take ${h(takeLabel(p))}: ${h(p.notes.slice(0, 40))}${p.notes.length > 40 ? '…' : ''}</button>`; }
   const chips = f.list ? S.lists[f.list].filter(v => v !== s).map(v => `<button class="chip ${v === t[k] ? 'on' : recentCls(f.list, v)}" data-v="${h(v)}">${h(show(k, v))}</button>`).join('') : '';
-  const range = (f.range ? `<button class="chip" data-k="→">→ to (range)</button>${k === 'focus' ? '<button class="chip" data-k="∞">∞</button>' : ''}` : '') + (k === 'tc' ? '<button class="chip last" data-now>Now (phone clock)</button>' : '');
+  const scBtn = k === 'scene' && t.scene ? `<button class="chip" data-scd>${S.sceneDesc[t.scene] ? 'Edit scene description' : '+ Scene description'}</button>` : '';
+  const range = scBtn + (f.range ? `<button class="chip" data-k="→">→ to (range)</button>${k === 'focus' ? '<button class="chip" data-k="∞">∞</button>' : ''}` : '') + (k === 'tc' ? '<button class="chip last" data-now>Now (phone clock)</button>' : '');
   let input = '';
   if (f.kind === 'text') input = `<input class="p-text" id="ptext" value="${h(t[k])}" placeholder="${h(f.ph || '')}" autocomplete="off" autocapitalize="off">`;
   if (f.kind === 'area') input = `<textarea class="p-text" id="ptext" placeholder="${h(f.ph || '')}">${h(t[k])}</textarea>`;
@@ -692,6 +706,7 @@ function panelValue(t, k) {
   p.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { markUsed(f.list, b.dataset.v); setVal(t, k, b.dataset.v); f.kind === 'text' ? panelValue(t, k) : after(); });
   const sm = p.querySelector('[data-same]'); if (sm) sm.onclick = () => { markUsed(f.list, s); setVal(t, k, s); after(); };
   const pn = p.querySelector('[data-prevnote]'); if (pn) pn.onclick = () => { setVal(t, 'notes', prevTake(t).notes); panelValue(t, k); };
+  const sdb = p.querySelector('[data-scd]'); if (sdb) sdb.onclick = () => { sceneDescPrompt(t); panelValue(t, k); };
   const nw = p.querySelector('[data-now]'); if (nw) nw.onclick = () => { const d = new Date(), z = n => String(n).padStart(2, '0'); setVal(t, 'tc', `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}:00`); };
   const ti = $('#ptext');
   if (ti) {
@@ -899,7 +914,7 @@ function viewSetup() {
         <button class="addbtn" data-cedit="+">+ Camera</button></div></div>
 
     <div class="field"><span>A new scene starts at shot</span><div class="seg" id="shotstart"><button data-v="1" class="${S.shotStart !== 'A' ? 'on' : ''}">1</button><button data-v="A" class="${S.shotStart === 'A' ? 'on' : ''}">A</button></div></div>
-    <div class="field"><span>Fields on the take page</span><div class="checks">${HIDEABLE.map(k => `<button class="chip ${visible(k) ? 'on' : ''}" data-hide="${k}">${F[k].label}</button>`).join('')}</div></div>
+    <div class="field"><span>Fields on the take page</span>${fieldsHTML()}</div>
     <label class="field"><span>Filter families · "Family: strengths" one per line (no strengths = goes in at once)</span><textarea id="fams" style="min-height:180px">${h(famText)}</textarea></label>
     ${lists}
     <div class="field"><button class="btn" id="reset" style="width:100%;min-height:44px;border:1px solid var(--line-strong);border-radius:8px;background:none;color:var(--danger);font-weight:700">Erase everything on this device</button></div></main>`;
@@ -912,7 +927,7 @@ function viewSetup() {
     checkpoint('add camera'); const used = S.cameras.map(x => x.l), nl = 'ABCDEFGHIJ'.split('').find(x => !used.includes(x)) || 'X', c0 = S.cameras[0] || {};
     S.cameras.push({ l: nl, color: PALETTE[S.cameras.length % PALETTE.length], format: '', fps: c0.fps || '24', shutter: c0.shutter || '180', wb: c0.wb || '5600', iso: c0.iso || '800' }); save(); cameraSheet(nl);
   });
-  document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => { const k = b.dataset.hide; S.hidden = visible(k) ? [...S.hidden, k] : S.hidden.filter(x => x !== k); save(); viewSetup(); });
+  bindFields(document, viewSetup);
   $('#fams').onchange = ev => {
     const fams = {};
     ev.target.value.split('\n').map(s => s.trim()).filter(Boolean).forEach(line => { const [f, d] = line.split(':'); fams[f.trim()] = d ? d.split(',').map(x => x.trim()).filter(Boolean) : []; });

@@ -324,3 +324,4 @@ header.top .hbtns .nav.undo { font-size: 13px; min-width: 0; padding: 0 8px; gap
 .takebox .tmid { cursor: pointer; padding: 2px 0; }
 .takebox .tno { font-size: 34px; }
 .tr.sst .tf:not(.takebox) .plus { width: 30px; height: 28px; top: 3px; right: 3px; } .tr.sst .tf:not(.takebox) .lbl { font-size: 10px; }
+.fieldsbtn { width: 100%; min-height: 44px; border: 0; background: none; color: var(--accent-text); font-size: 15px; font-weight: 600; text-align: center; cursor: pointer; }
