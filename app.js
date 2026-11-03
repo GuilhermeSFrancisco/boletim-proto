@@ -4,9 +4,10 @@
 'use strict';
 
 const KEY = 'boletim-proto-v4', OLD_KEY = 'boletim-proto-v3';
-const PALETTE = ['#E8590C', '#1C7ED6', '#3E8E3E', '#C08A12', '#7D55B8', '#C2447A', '#2B9A93', '#55555C'];
-// [value, label on the sheet, English name for CSV take type]
-const TYPES = [['Take', '', 'Take'], ['Claquete', 'claq', 'Slate only'], ['Disparo', 'false', 'False start'], ['MOS', 'MOS', 'MOS'],
+// ShotSize's own colours (amber, Signal Blue, green, Machine Yellow, red, light blue, white, grey); any other can be picked
+const PALETTE = ['#F28A2E', '#2E9BE6', '#3FBF7F', '#FFC91F', '#E5484D', '#9AD3F7', '#F8F8F8', '#7A7A82'];
+// [value, label on the sheet, English name (screen and CSV take type)]
+const TYPES = [['Take', '', 'Take'], ['Claquete', 'slate', 'Slate only'], ['Disparo', 'false', 'False start'], ['MOS', 'MOS', 'MOS'],
   ['Tail', 'tail', 'Tail slate'], ['Pickup', 'PU', 'Pickup'], ['Insert', 'ins', 'Insert'], ['VFX', 'VFX', 'VFX plate'], ['Wild', 'wild', 'Wild'], ['Test', 'test', 'Test']];
 const NO_NUMBER = ['Claquete', 'Disparo', 'Wild', 'Test'];                 // these don't use up a take number
 const DETAIL = ['lens', 'stop', 'filters', 'focus', 'height', 'tilt', 'fps', 'shutter', 'wb', 'iso', 'lut'];   // a change here splits the details block
@@ -60,7 +61,7 @@ const dmy = d => d.split('-').reverse().join('/');
 
 function defaults() {
   return {
-    project: 'Untitled project', theme: 'dark', stopStyle: 'cine', shotStart: '1',
+    project: 'Untitled project', theme: 'dark', stopStyle: 'cine', shotStart: '1', newestFirst: true, sceneDesc: {},
     cameras: [{ l: 'A', color: PALETTE[0], format: '', fps: '24', shutter: '180', wb: '5600', iso: '800' },
       { l: 'B', color: PALETTE[1], format: '', fps: '24', shutter: '180', wb: '5600', iso: '800' }],
     camera: 'A', viewDate: '', roll: {}, rolls: [], hidden: [], plans: {}, archive: [],
@@ -95,24 +96,47 @@ function load() {
   for (const k in d) if (!(k in s)) s[k] = d[k];
   for (const c of s.cameras) for (const k of CAMSET) if (!(k in c)) c[k] = '';
   if (!s.families['Classic Soft']) s.families['Classic Soft'] = d.families['Classic Soft'];
+  // the prototype's earlier default colours become the app palette (a colour the user picked stays)
+  const OLD = ['#E8590C', '#1C7ED6', '#3E8E3E', '#C08A12', '#7D55B8', '#C2447A', '#2B9A93', '#55555C', '#B5452E', '#2E7FC4'];
+  s.cameras.forEach((c, i) => { if (OLD.includes(String(c.color).toUpperCase())) c.color = PALETTE[i % PALETTE.length]; });
   return s;
 }
 S = load();
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('Could not save on this device'); } }
+
+/* ---------- undo: a checkpoint before every change; the UNDO button walks back (kept until the app closes) ---------- */
+const HIST = []; let lastCk = '';
+function checkpoint(label, key = '') {   // one checkpoint per field while its panel is open (key), not per keystroke
+  if (key && key === lastCk) return;
+  lastCk = key; HIST.push({ label, s: JSON.stringify(S) }); if (HIST.length > 40) HIST.shift();
+  const b = $('#undo'); if (b) b.disabled = false;
+}
+function undo() {
+  const c = HIST.pop(); if (!c) return toast('Nothing to undo');
+  S = JSON.parse(c.s); lastCk = ''; save(); applyTheme(); closeSheet(); route(true); toast('Undone: ' + c.label);
+}
+const undoBtn = () => `<button class="nav undo" id="undo" ${HIST.length ? '' : 'disabled'} aria-label="Undo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 7"></path></svg><span>UNDO</span></button>`;
 function applyTheme() { document.documentElement.dataset.theme = S.theme; document.querySelector('meta[name=theme-color]').content = S.theme === 'light' ? '#FFFFFF' : '#0A0A0B'; }
 
-/* ---------- lists ordered by use ---------- */
+/* ---------- lists keep their own order (ascending, as in Setup); the last one used is marked, not moved ---------- */
 function markUsed(list, v) { if (list && v) S.used[list + '|' + v] = Date.now(); }
-function ordered(list, arr) { const u = k => S.used[list + '|' + k] || 0; return [...(arr || S.lists[list])].sort((a, b) => u(b) - u(a)); }
+function recent(list, arr) { let best = null, at = 0; for (const v of arr || S.lists[list]) { const u = S.used[list + '|' + v] || 0; if (u > at) { at = u; best = v; } } return best; }
+const recentCls = (list, v, arr) => recent(list, arr) === v ? 'recent' : '';
 
 /* ---------- derived numbering ---------- */
 const cam = l => S.cameras.find(c => c.l === l) || { l, color: PALETTE[7], format: '' };
+const ink = hex => { const n = parseInt(String(hex).slice(1), 16), L = 0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255); return L > 150 ? '#0A0A0B' : '#FFFFFF'; };
 const take = id => S.takes.find(t => t.id === id);
 const sameShot = (a, b) => a.cam === b.cam && a.scene === b.scene && a.shot === b.shot;
-function clipNo(t) { let n = 0; for (const x of S.takes) { if (x.cam === t.cam && x.roll === t.roll) n++; if (x === t) return n; } return n; }
-function takeNo(t) {   // claq / false start / wild don't use up a number; reclassifying one renumbers the takes after it
+// A number typed by hand (takeN / clipN) holds for that take, and the ones after it count on from it.
+function clipNo(t) { let n = 0; for (const x of S.takes) { if (x.cam === t.cam && x.roll === t.roll) n = x.clipN ? Number(x.clipN) : n + 1; if (x === t) return n; } return n; }
+function takeNo(t) {   // slate only / false start / wild don't use up a number; reclassifying one renumbers the takes after it
   let n = 0;
-  for (const x of S.takes) { if (!sameShot(x, t)) continue; if (x === t) return n + 1; if (!NO_NUMBER.includes(x.type)) n++; }
+  for (const x of S.takes) {
+    if (!sameShot(x, t)) continue;
+    if (x === t) return x.takeN ? Number(x.takeN) : n + 1;
+    if (!NO_NUMBER.includes(x.type)) n = x.takeN ? Number(x.takeN) : n + 1;
+  }
   return n + 1;
 }
 const typeOf = v => TYPES.find(x => x[0] === v) || TYPES[0];
@@ -135,9 +159,9 @@ function show(k, v) {
 const has = (t, k) => k === 'filters' ? (t.filters || []).length > 0 : (t[k] ?? '') !== '';
 const detailKey = t => DETAIL.map(k => k === 'filters' ? fmtFilters(t.filters) : t[k] || '').join('|');
 const visible = k => !S.hidden.includes(k);
-function detailParts(t, prev, full) {   // [text, changed?]; camera settings that changed since the take before are marked
-  const parts = [];
-  const add = (k, txt) => { if (visible(k) && txt) parts.push([txt, CAMSET.includes(k) && prev && (prev[k] || '') !== (t[k] || '')]); };
+function detailParts(t, prev, full) {   // [text, changed?]: what changed since the take before in the same scene is marked
+  const parts = [], val = (x, k) => k === 'filters' ? fmtFilters(x.filters) : x[k] || '';
+  const add = (k, txt) => { if (visible(k) && txt) parts.push([txt, !!prev && prev.scene === t.scene && val(prev, k) !== val(t, k)]); };
   add('lens', t.lens); add('stop', fmtStop(t.stop)); add('filters', shortFilters(t.filters)); add('focus', t.focus && 'F ' + t.focus);
   add('height', t.height && 'H ' + t.height); add('tilt', t.tilt && 'tilt ' + t.tilt + (/[°\d]$/.test(t.tilt) && !/°/.test(t.tilt) ? '°' : ''));
   add('fps', t.fps && t.fps + 'fps'); add('shutter', t.shutter && t.shutter + '°'); add('wb', t.wb && t.wb + 'K'); add('iso', t.iso && 'ISO ' + t.iso);
@@ -197,9 +221,10 @@ function addShot(from) {
   suggestFrom(t, from);
   return insertAfterCam(t);
 }
-function addScene(l, scene, shot, desc) {   // a new scene starts from the camera's defaults (shown before you start); the rest in grey
+function addScene(l, scene, shot, head) {   // a new scene starts from the camera's defaults (shown before you start); the rest in grey
   const from = lastOf(l), c = cam(l), t = blank(l);
-  t.scene = scene; t.shot = shot; t.desc = desc || '';
+  t.scene = scene; t.shot = shot;
+  if (head && !S.sceneDesc[scene]) S.sceneDesc[scene] = head;   // the call sheet heading describes the scene, not the shot
   suggestFrom(t, from);
   for (const k of CAMSET) if (c[k]) { t[k] = c[k]; delete t.sug[k]; }
   if (scene && !S.lists.scenes.includes(scene)) S.lists.scenes.push(scene);
@@ -236,25 +261,31 @@ function rollHTML(l, r) {
   const takes = S.takes.filter(t => t.date === S.viewDate && t.cam === l && t.roll === r);
   const groups = [];
   for (const t of takes) { const g = groups[groups.length - 1]; if (g && sameShot(g[0], t)) g.push(t); else groups.push([t]); }
-  const rows = groups.map(g => {
-    const runs = []; for (const t of g) { const ru = runs[runs.length - 1]; if (ru && detailKey(ru[0]) === detailKey(t)) ru.push(t); else runs.push([t]); }
-    const runStart = new Map(runs.map(ru => [ru[0], ru]));
-    return g.map((t, i) => {
-      const ru = runStart.get(t), prev = ru && S.takes[S.takes.indexOf(t) - 1] && prevTake(t);
+  const rev = S.newestFirst, flip = a => rev ? [...a].reverse() : a;   // newest on top: the roll in use stays in sight
+  const shown = flip(groups);
+  const rows = shown.map((g0, gi) => {
+    const runs = []; for (const t of g0) { const ru = runs[runs.length - 1]; if (ru && detailKey(ru[0]) === detailKey(t)) ru.push(t); else runs.push([t]); }
+    const g = flip(g0), runStart = new Map(flip(runs).map(ru => [flip(ru)[0], ru]));
+    const nextG = shown[gi + 1], sceneEnd = !nextG || nextG[0].scene !== g0[0].scene;
+    const prevG = shown[gi - 1], sd = S.sceneDesc[g0[0].scene];
+    const head = (!prevG || prevG[0].scene !== g0[0].scene) && sd ? `<tr class="scene-head"><td colspan="4">${h(g0[0].scene)} · ${h(sd)}</td></tr>` : '';
+    return head + g.map((t, i) => {
+      const ru = runStart.get(t), prev = ru && prevTake(ru[0]);   // compare the run's first take with the take before it
       const det = ru ? `<td class="det" rowspan="${ru.length}"><button data-det="${ru.map(x => x.id).join(',')}" style="-webkit-line-clamp:${ru.length * 2}">${
-        detailParts(t, prev).map(([x, chg]) => chg ? `<b class="chg">${h(x)}</b>` : h(x)).join(' · ') || '<span style="color:var(--subtle)">—</span>'}</button></td>` : '';
-      return `<tr class="${i === g.length - 1 ? 'grp-end' : ''}">
+        detailParts(ru[0], prev).map(([x, chg]) => chg ? `<b class="chg">${h(x)}</b>` : h(x)).join(' · ') || '<span style="color:var(--subtle)">—</span>'}</button></td>` : '';
+      return `<tr class="${i === g.length - 1 ? (sceneEnd ? 'grp-end scene-end' : 'grp-end') : ''}">
         ${i === 0 ? `<td class="sc" rowspan="${g.length}">${h(t.scene || '—')}</td><td class="sc" rowspan="${g.length}">${h(t.shot || '—')}</td>` : ''}
         <td class="tc-cell"><button data-t="${t.id}"><span class="tk ${t.circled ? 'circ' : ''} ${NO_NUMBER.includes(t.type) ? 'sp' : ''}">${h(takeLabel(t))}</span>
           <span class="clipno">${pad3(clipNo(t))}</span></button></td>${det}</tr>`;
     }).join('');
   }).join('');
   const c = cam(l), isCur = S.roll[l] === r;
-  return `<section class="roll"><div class="roll-band" style="background:${c.color}"><b>Cam ${h(l)} · Roll ${h(r)}</b>
+  const add = isCur ? `<div class="roll-add"><button class="addbtn" data-newscene="${h(l)}">+ Scene in ${h(r)}</button></div>` : '';
+  return `<section class="roll"><div class="roll-band" style="background:${c.color};color:${ink(c.color)}"><b>Cam ${h(l)} · Roll ${h(r)}</b>
       <span class="cnt">${takes.length} clip${takes.length === 1 ? '' : 's'}</span><button class="dots" data-rmenu="${h(l)}|${h(r)}" aria-label="Roll options">⋮</button></div>
-    ${takes.length ? `<table class="rt"><colgroup><col style="width:17%"><col style="width:15%"><col style="width:28%"><col></colgroup>
+    ${rev ? add : ''}${takes.length ? `<table class="rt"><colgroup><col style="width:17%"><col style="width:15%"><col style="width:28%"><col></colgroup>
     <tr><th>Scene</th><th>Shot</th><th>Take · Clip</th><th>Details</th></tr>${rows}</table>` : '<div class="roll-empty">Empty roll.</div>'}
-    ${isCur ? `<div class="roll-add"><button class="addbtn" data-newscene="${h(l)}">+ Scene in ${h(r)}</button></div>` : ''}</section>`;
+    ${rev ? '' : add}</section>`;
 }
 
 function viewDay() {
@@ -262,20 +293,23 @@ function viewDay() {
   const ds = days(); if (!ds.includes(S.viewDate)) S.viewDate = today();
   const di = ds.indexOf(S.viewDate);
   if (S.camera && !S.cameras.some(c => c.l === S.camera)) S.camera = S.cameras[0].l;
-  const blocks = camsInView().map(l => rollsOn(S.viewDate, l).map(r => rollHTML(l, r)).join('') +
-    `<button class="addbtn big" data-newroll="${h(l)}" style="--cc:${cam(l).color}">+ Roll · Cam ${h(l)}</button>`).join('');
+  const blocks = camsInView().map(l => {
+    const rs = rollsOn(S.viewDate, l), add = `<button class="addbtn big" data-newroll="${h(l)}" style="--cc:${cam(l).color}">+ Roll · Cam ${h(l)}</button>`;
+    return S.newestFirst ? add + [...rs].reverse().map(r => rollHTML(l, r)).join('') : rs.map(r => rollHTML(l, r)).join('') + add;
+  }).join('');
   const plan = S.plans[S.viewDate];
   const fmt = S.cameras.filter(c => c.format).map(c => c.l + ': ' + c.format).join(' · ');
   $('#app').innerHTML = `<header class="top"><button class="nav l" onclick="go('help')">Help</button><h1>Camera Report</h1>
-    <button class="nav r" onclick="go('setup')">Setup</button></header>
+    <span class="hbtns">${undoBtn()}<button class="nav" onclick="go('setup')">Setup</button></span></header>
     <div class="dayhead"><button class="projbtn" id="proj"><span class="lbl">Project</span><span class="v">${h(S.project)}</span>
         ${fmt ? `<span class="fmt">${h(fmt)}</span>` : ''}</button>
       <div><div class="lbl">Date</div><div class="datebar"><button id="dprev" ${di > 0 ? '' : 'disabled'} aria-label="Previous day">‹</button>
         <span class="v">${h(dmy(S.viewDate))}</span><button id="dnext" ${di < ds.length - 1 ? '' : 'disabled'} aria-label="Next day">›</button></div></div></div>
     <div class="daybar"><button class="pbtn" id="plan">${plan ? `Day plan · ${plan.scenes.length} scene${plan.scenes.length === 1 ? '' : 's'}` : '+ Day plan (call sheet)'}</button>
       <button class="pbtn" id="shareday">Share day</button></div>
-    <div class="camsw">${S.cameras.map(c => `<button data-cam="${h(c.l)}" class="${S.camera === c.l ? 'on' : ''}" style="${S.camera === c.l ? 'background:' + c.color : '--cc:' + c.color}">Cam ${h(c.l)}</button>`).join('')}
-      <button data-cam="" class="${S.camera ? '' : 'on all'}">${S.cameras.map(c => c.l).join(' + ')}</button></div>
+    <div class="camsw">${S.cameras.map(c => `<button data-cam="${h(c.l)}" class="${S.camera === c.l ? 'on' : ''}" style="${S.camera === c.l ? 'background:' + c.color + ';color:' + ink(c.color) : '--cc:' + c.color}">Cam ${h(c.l)}</button>`).join('')}
+      <button data-cam="" class="${S.camera ? '' : 'on all'}">${S.cameras.map(c => c.l).join(' + ')}</button>
+      <button class="camedit" id="camedit" aria-label="Edit cameras">⋮</button></div>
     <main>${blocks}</main>`;
 
   const cur = lastOf(S.camera);
@@ -287,6 +321,8 @@ function viewDay() {
   document.querySelectorAll('[data-newscene]').forEach(b => b.onclick = () => sceneSheet(b.dataset.newscene));
   document.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => { S.camera = b.dataset.cam; save(); viewDay(); });
   $('#proj').onclick = projectSheet;
+  $('#camedit').onclick = () => cameraSheet(S.camera || S.cameras[0].l);
+  $('#undo').onclick = undo;
   $('#plan').onclick = () => go('plan');
   $('#shareday').onclick = () => shareSheet('Day ' + dmy(S.viewDate), S.takes.filter(t => t.date === S.viewDate));
   $('#dprev').onclick = () => { if (di > 0) { S.viewDate = ds[di - 1]; viewDay(); } };
@@ -311,17 +347,17 @@ function rollMenu(l, r) {
     <button class="btn danger" id="rd">Delete roll ${h(r)}${takes.length ? ` and its ${takes.length} take${takes.length > 1 ? 's' : ''}` : ''}</button>`, el => {
     el.querySelector('#rn').onclick = () => {
       const v = (prompt('New name for roll ' + r, r) || '').trim().toUpperCase(); if (!v || v === r) return;
-      takes.forEach(t => t.roll = v); S.rolls.forEach(x => { if (x.cam === l && x.roll === r) x.roll = v; }); if (S.roll[l] === r) S.roll[l] = v;
+      checkpoint('rename roll ' + r); takes.forEach(t => t.roll = v); S.rolls.forEach(x => { if (x.cam === l && x.roll === r) x.roll = v; }); if (S.roll[l] === r) S.roll[l] = v;
       save(); closeSheet(); viewDay();
     };
     el.querySelector('#rs').onclick = () => { closeSheet(); shareSheet('Roll ' + r, takes); };
     el.querySelector('#rd').onclick = () => {
       if (takes.length && !confirm(`Delete roll ${r} and its ${takes.length} take${takes.length > 1 ? 's' : ''}?`)) return;
-      const before = JSON.stringify({ takes: S.takes, rolls: S.rolls, roll: S.roll });
+      checkpoint('delete roll ' + r);
       S.takes = S.takes.filter(t => !(t.cam === l && t.roll === r)); S.rolls = S.rolls.filter(x => !(x.cam === l && x.roll === r));
       if (S.roll[l] === r) { const left = [...S.takes.filter(t => t.cam === l).map(t => t.roll), ...S.rolls.filter(x => x.cam === l).map(x => x.roll)]; if (left.length) S.roll[l] = left[left.length - 1]; else delete S.roll[l]; }
       save(); closeSheet(); viewDay();
-      toast(`Roll ${r} deleted`, 5000, { label: 'Undo', fn: () => { Object.assign(S, JSON.parse(before)); save(); viewDay(); } });
+      toast(`Roll ${r} deleted`, 5000, { label: 'Undo', fn: undo });
     };
   });
 }
@@ -336,7 +372,7 @@ function rollSheet(l, from) {   // + Roll: the next number is suggested; the sho
     const inp = el.querySelector('#nr');
     const step = d => { const m = inp.value.match(/^(.*?)(\d+)$/); if (m) inp.value = m[1] + String(Math.max(1, Number(m[2]) + d)).padStart(m[2].length, '0'); };
     el.querySelector('#rprev').onclick = () => step(-1); el.querySelector('#rnext').onclick = () => step(1);
-    const start = () => { const v = inp.value.trim().toUpperCase(); if (!v) return null; openRoll(l, v); closeSheet(); return v; };
+    const start = () => { const v = inp.value.trim().toUpperCase(); if (!v) return null; checkpoint('new roll ' + v); openRoll(l, v); closeSheet(); return v; };
     if (el.querySelector('#same')) el.querySelector('#same').onclick = () => { if (!start()) return; const n = addTake(last); toast(`Roll ${n.roll} · take ${takeLabel(n)} · clip 001`); go('t/' + n.id); };
     el.querySelector('#newsc').onclick = () => { if (!start()) return; if (!location.hash.startsWith('#t/')) viewDay(); sceneSheet(l); };
   }, true);
@@ -357,10 +393,9 @@ function sceneSheet(l) {   // + Scene: no "next number" guess (scenes aren't sho
     <button class="btn primary" id="go">Start scene · take 1</button>`, el => {
     const sc = el.querySelector('#scn'), sh = el.querySelector('#sht'); let head = '';
     el.querySelectorAll('[data-sc]').forEach(b => b.onclick = () => { sc.value = b.dataset.sc; head = b.dataset.head || ''; el.querySelectorAll('[data-sc]').forEach(x => x.classList.toggle('on', x === b)); });
-    setTimeout(() => sc.focus(), 80);
-    el.querySelector('#go').onclick = () => {
+    el.querySelector('#go').onclick = () => {   // no autofocus: an open keyboard swallowed the first tap on this button
       const s = sc.value.trim(); if (!s) { sc.focus(); return toast('Type the scene or pick one'); }
-      const t = addScene(l, s, sh.value.trim(), head); closeSheet(); go('t/' + t.id);
+      checkpoint('new scene ' + s); const t = addScene(l, s, sh.value.trim(), head || planHead(s)); closeSheet(); go('t/' + t.id);
     };
   }, true);
 }
@@ -376,16 +411,52 @@ function projectSheet() {
     el.querySelector('#pn').onchange = () => viewDay();
     el.querySelector('#pall').onclick = () => { closeSheet(); shareSheet('All days', S.takes); };
     el.querySelector('#pset').onclick = () => { closeSheet(); go('setup'); };
-    const PJ = ['project', 'takes', 'roll', 'rolls', 'plans'];
+    const PJ = ['project', 'takes', 'roll', 'rolls', 'plans', 'sceneDesc'];
     const pack = () => Object.fromEntries(PJ.map(k => [k, S[k]]));
     el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
-      const i = +b.dataset.open, other = S.archive[i]; S.archive[i] = pack(); Object.assign(S, other); S.viewDate = ''; save(); closeSheet(); viewDay();
+      checkpoint('switch project'); const i = +b.dataset.open, other = S.archive[i]; S.archive[i] = pack(); Object.assign(S, other); S.viewDate = ''; save(); closeSheet(); viewDay();
     });
     el.querySelector('#pnew').onclick = () => {
       const name = (prompt('Name of the new project') || '').trim(); if (!name) return;
-      S.archive.push(pack()); Object.assign(S, { project: name, takes: [], roll: {}, rolls: [], plans: {}, viewDate: '' }); save(); closeSheet(); viewDay();
+      checkpoint('new project'); S.archive.push(pack()); Object.assign(S, { project: name, takes: [], roll: {}, rolls: [], plans: {}, sceneDesc: {}, viewDate: '' }); save(); closeSheet(); viewDay();
     };
   });
+}
+
+function planHead(scene) { for (const d in S.plans) { const x = S.plans[d].scenes.find(y => y.id === scene); if (x && x.head) return x.head; } return ''; }
+
+function cameraSheet(l) {   // the cameras, edited where they show (the day page), not only in Setup
+  const c = cam(l), i = S.cameras.indexOf(c);
+  const defRow = k => `<div class="p-sub">${F[k].label}</div><div class="chips">${S.lists[F[k].list].map(v => `<button class="chip ${c[k] === v ? 'on' : ''}" data-def="${k}" data-v="${h(v)}">${h(show(k, v))}</button>`).join('')}
+    <button class="chip" data-def="${k}" data-other>Other…</button></div>`;
+  sheet('Cameras', `<div class="camtabs">${S.cameras.map(x => `<button data-ct="${h(x.l)}" class="${x === c ? 'on' : ''}" style="${x === c ? 'background:' + x.color + ';color:' + ink(x.color) : '--cc:' + x.color}">${h(x.l)}</button>`).join('')}
+      <button data-ct="+" aria-label="Add a camera">+</button></div>
+    <div class="camrow"><label class="field" style="padding:0;flex:none;width:72px"><span>Letter</span><input id="cl" value="${h(c.l)}" style="text-transform:uppercase"></label>
+      <label class="field" style="padding:0;flex:1"><span>Format</span><input id="cf" value="${h(c.format)}" placeholder="e.g. Venice 2 · 6K 17:9"></label></div>
+    <div class="p-sub">Color</div><div class="swatches">${PALETTE.map(col => `<button data-col="${col}" class="${c.color.toLowerCase() === col.toLowerCase() ? 'on' : ''}" style="background:${col}" aria-label="Color ${col}"></button>`).join('')}
+      <label class="swatch-any" aria-label="Any color"><input type="color" id="cc" value="${h(c.color)}"><span>Other</span></label></div>
+    <p style="margin-top:10px">Defaults for a new scene on Cam ${h(c.l)}:</p>${CAMSET.map(defRow).join('')}
+    ${S.cameras.length > 1 ? `<button class="btn danger" id="crm" style="margin-top:12px">Remove Cam ${h(c.l)} (its takes stay)</button>` : ''}`, el => {
+    const again = () => cameraSheet(c.l);
+    const ck = what => checkpoint('camera ' + c.l + ' ' + what, 'cam|' + c.l + '|' + what);
+    el.querySelectorAll('[data-ct]').forEach(b => b.onclick = () => {
+      if (b.dataset.ct !== '+') return cameraSheet(b.dataset.ct);
+      checkpoint('add camera'); const used = S.cameras.map(x => x.l), nl = 'ABCDEFGHIJ'.split('').find(x => !used.includes(x)) || 'X';
+      S.cameras.push({ l: nl, color: PALETTE[S.cameras.length % PALETTE.length], format: '', fps: c.fps, shutter: c.shutter, wb: c.wb, iso: c.iso }); save(); cameraSheet(nl);
+    });
+    el.querySelector('#cl').onchange = ev => { const v = ev.target.value.trim().toUpperCase(); if (!v || v === c.l || S.cameras.some(x => x.l === v)) return; ck('letter'); const old = c.l; c.l = v;
+      S.takes.forEach(t => { if (t.cam === old) t.cam = v; }); S.rolls.forEach(x => { if (x.cam === old) x.cam = v; }); if (S.roll[old]) { S.roll[v] = S.roll[old]; delete S.roll[old]; } if (S.camera === old) S.camera = v; save(); cameraSheet(v); };
+    el.querySelector('#cf').oninput = ev => { ck('format'); c.format = ev.target.value; save(); };
+    el.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { ck('color'); c.color = b.dataset.col; save(); again(); });
+    el.querySelector('#cc').onchange = ev => { ck('color'); c.color = ev.target.value; save(); again(); };
+    el.querySelectorAll('[data-def]').forEach(b => b.onclick = () => {
+      const k = b.dataset.def; let v = b.dataset.v;
+      if (b.hasAttribute('data-other')) { v = (prompt(F[k].label + ' for Cam ' + c.l, c[k] || '') || '').trim(); if (!v) return; if (!S.lists[F[k].list].includes(v)) S.lists[F[k].list].push(v); }
+      ck(k); c[k] = v; save(); again();
+    });
+    if (el.querySelector('#crm')) el.querySelector('#crm').onclick = () => { checkpoint('remove camera ' + c.l); S.cameras.splice(i, 1); if (S.camera === c.l) S.camera = S.cameras[0].l; save(); closeSheet(); route(); };
+  });
+  const m = $('#sheet .modal'); if (m) m.addEventListener('click', ev => { if (ev.target.hasAttribute('data-close') && !location.hash.startsWith('#t/')) route(); });
 }
 
 /* ---------- TAKE page ---------- */
@@ -404,12 +475,14 @@ const sugKeys = t => SHOT_SUGGEST.filter(k => t.sug[k] != null && !has(t, k) && 
 function renderTake(t) {
   const list = S.takes.filter(x => x.cam === t.cam && x.roll === t.roll), i = list.indexOf(t);
   const c = cam(t.cam), ty = typeOf(t.type), p = prevTake(t);
-  const takeBox = `<div class="tf big takebox ${active === 'take' ? 'active' : ''}" data-f="take"><span class="lbl">Take · Clip</span>
-    ${t.type !== 'Take' ? `<span class="typechip">${h(ty[0] === 'Disparo' ? 'False start' : ty[0] === 'Claquete' ? 'Claquete (slate only)' : ty[2])}</span>` : ''}
-    <div class="tline"><span class="tno">${h(takeLabel(t))}${t.circled ? ' <span class="circ-mark">●</span>' : ''}</span><span class="cno">· ${pad3(clipNo(t))}</span></div>
-    <div class="takenav"><button data-nav="-1" ${i > 0 ? '' : 'disabled'} aria-label="Previous take">‹</button>
-      <button data-nav="1" ${i < list.length - 1 ? '' : 'disabled'} aria-label="Next take">›</button>
-      <button class="add" data-add="take" aria-label="New take">+</button></div></div>`;
+  // ‹ take · clip › with + on top, like Scene and Shot; tapping the middle opens type, circle and the numbers
+  const takeBox = `<div class="tf big takebox ${active === 'take' ? 'active' : ''}" data-f="take"><span class="lbl">Take ✎</span>
+    <span class="plus" data-add="take" role="button" aria-label="New take">+</span>
+    <div class="tline"><button class="tnav" data-nav="-1" ${i > 0 ? '' : 'disabled'} aria-label="Previous take">‹</button>
+      <span class="tmid"><span class="tno ${t.circled ? 'circ' : ''}">${h(takeLabel(t))}</span><span class="cno">${pad3(clipNo(t))}</span>
+      ${t.type !== 'Take' ? `<span class="typechip">${h(ty[2])}</span>` : ''}</span>
+      <button class="tnav" data-nav="1" ${i < list.length - 1 ? '' : 'disabled'} aria-label="Next take">›</button></div></div>`;
+  const sd = S.sceneDesc[t.scene];
   const prevNote = !t.notes && p && p.notes && visible('notes')
     ? `<div class="tr c1"><button class="notechip" data-prevnote>= Take ${h(takeLabel(p))}: “${h(p.notes.length > 48 ? p.notes.slice(0, 48) + '…' : p.notes)}”</button></div>` : '';
   $('#tp').innerHTML =
@@ -418,6 +491,7 @@ function renderTake(t) {
         <span class="plus" data-add="roll" role="button" aria-label="New roll">+</span></div>`]) +
     row('', [fieldHTML(t, 'scene', true, '<span class="plus" data-add="scene" role="button" aria-label="New scene">+</span>'),
       fieldHTML(t, 'shot', true, '<span class="plus" data-add="shot" role="button" aria-label="New shot">+</span>'), takeBox]) +
+    (t.scene ? `<div class="tr c1"><button class="scdesc" data-scdesc><span class="lbl">Scene ${h(t.scene)}</span><span>${h(sd || 'Add a scene description')}</span></button></div>` : '') +
     row('', CAMSET.map(k => fieldHTML(t, k))) +
     row('', ['lens', 'stop', 'filters'].map(k => fieldHTML(t, k, true))) +
     row('', ['focus', 'height', 'tilt'].map(k => fieldHTML(t, k, true))) +
@@ -432,11 +506,16 @@ function renderTake(t) {
   });
   document.querySelectorAll('#tp [data-nav]').forEach(b => b.onclick = () => { const n = list[i + Number(b.dataset.nav)]; if (n) go('t/' + n.id + (active && active !== 'take' ? '/' + active : '')); });
   document.querySelectorAll('#tp [data-add]').forEach(b => b.onclick = ev => { ev.stopPropagation(); doAdd(t, b.dataset.add); });
-  const pn = $('#tp [data-prevnote]'); if (pn) pn.onclick = () => { t.notes = p.notes; save(); renderTake(t); };
+  const pn = $('#tp [data-prevnote]'); if (pn) pn.onclick = () => { checkpoint('repeat note'); t.notes = p.notes; save(); renderTake(t); };
+  const scd = $('#tp [data-scdesc]'); if (scd) scd.onclick = () => {
+    const v = prompt('Scene ' + t.scene + ' · description (whole scene)', sd || ''); if (v == null) return;
+    checkpoint('scene description'); if (v.trim()) S.sceneDesc[t.scene] = v.trim(); else delete S.sceneDesc[t.scene]; save(); renderTake(t);
+  };
   takeToolbar(t);
 }
 function doAdd(t, what) {
   closePanel();
+  if (what === 'take' || what === 'shot') checkpoint('+ ' + what);
   if (what === 'take') { const n = addTake(t); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))}`); go('t/' + n.id); }
   if (what === 'shot') { const n = addShot(t); go('t/' + n.id); }
   if (what === 'scene') sceneSheet(t.cam);
@@ -452,10 +531,10 @@ function takeToolbar(t) {   // the big + Take stays at the bottom, in reach of t
   setToolbar(`${rep}<button class="tbtn primary wide" id="addtake">+ Take</button>`);
   $('#addtake').onclick = () => doAdd(t, 'take');
   if ($('#repeat')) $('#repeat').onclick = () => {
-    const before = JSON.stringify(t);
+    checkpoint('repeat');
     for (const k of ks) { t[k] = JSON.parse(JSON.stringify(t.sug[k])); if (F[k].list) markUsed(F[k].list, t[k]); delete t.sug[k]; }
     save(); renderTake(t);
-    toast(`Repeated ${ks.length} field${ks.length > 1 ? 's' : ''}`, 5000, { label: 'Undo', fn: () => { Object.assign(t, JSON.parse(before)); save(); renderTake(t); } });
+    toast(`Repeated ${ks.length} field${ks.length > 1 ? 's' : ''}`, 5000, { label: 'Undo', fn: undo });
   };
   if ($('#onebyone')) $('#onebyone').onclick = () => { t.noRepeat = true; save(); renderTake(t); };
 }
@@ -464,22 +543,24 @@ function viewTake(id, field) {
   const t = take(id); if (!t) return go('');
   active = null;
   $('#app').innerHTML = `<header class="top"><button class="nav l" id="back">‹ Day</button><h1>Cam ${h(t.cam)} · ${h(t.roll)}</h1>
-    <span class="hbtns"><button class="nav" id="circ" aria-label="${t.circled ? 'Uncircle' : 'Circle'} this take">${t.circled ? '●' : '○'}</button>
+    <span class="hbtns">${undoBtn()}<button class="nav" id="circ" aria-label="${t.circled ? 'Uncircle' : 'Circle'} this take">${t.circled ? '●' : '○'}</button>
     <button class="nav danger" id="del" aria-label="Delete this take"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></header>
     <main><div class="tp" id="tp"></div></main>`;
   renderTake(t);
   $('#back').onclick = () => { S.viewDate = t.date; save(); go(''); };
-  $('#circ').onclick = () => { t.circled = !t.circled; save(); viewTake(t.id); toast(t.circled ? 'Circled' : 'Not circled'); };
+  $('#undo').onclick = undo;
+  $('#circ').onclick = () => { checkpoint(t.circled ? 'uncircle' : 'circle'); t.circled = !t.circled; save(); viewTake(t.id); toast(t.circled ? 'Circled' : 'Not circled'); };
   $('#del').onclick = () => {
+    checkpoint('delete take ' + takeLabel(t));
     const list = S.takes.filter(x => x.cam === t.cam && x.roll === t.roll), i = list.indexOf(t), at = S.takes.indexOf(t);
     S.takes.splice(at, 1); save(); const n = list[i - 1] || list[i + 1]; n ? go('t/' + n.id) : go('');
-    toast(`Take ${takeLabel(t)} deleted · clips after it move up`, 5000, { label: 'Undo', fn: () => { S.takes.splice(at, 0, t); save(); go('t/' + t.id); } });
+    toast(`Take ${takeLabel(t)} deleted · clips after it move up`, 5000, { label: 'Undo', fn: undo });
   };
   if (field) openPanel(t, field);
 }
 
 /* ---------- bottom input panel ---------- */
-function closePanel() { active = null; const p = $('#panel'); if (p) p.innerHTML = ''; document.documentElement.style.setProperty('--panel-h', '0px'); }
+function closePanel() { active = null; lastCk = ''; const p = $('#panel'); if (p) p.innerHTML = ''; document.documentElement.style.setProperty('--panel-h', '0px'); }
 const nextField = k => { const i = ORDER.indexOf(k); return ORDER.slice(i + 1).find(visible) || null; };
 
 function openPanel(t, k) {
@@ -506,6 +587,7 @@ function panelShell(t, k, label, cur, body, empty, noNext) {
   const n = $('#pnext'); if (n) n.onclick = () => { keep(); const nf = nextField(k); nf ? openPanel(t, nf) : (closePanel(), renderTake(t)); };
 }
 function setVal(t, k, v) {
+  checkpoint(F[k] ? F[k].label : k, t.id + '|' + k);
   t[k] = v; if (v !== '' && !(Array.isArray(v) && !v.length)) delete t.sug[k];
   if (k === 'desc') for (const x of S.takes) if (sameShot(x, t) && x.roll === t.roll) x.desc = v;   // description belongs to the shot
   save(); renderTake(t);
@@ -518,7 +600,7 @@ function panelValue(t, k) {
   let top = '';
   if (s != null && !has(t, k)) top = `<button class="chip last" data-same>Last: ${h(show(k, s))}</button>`;
   if (k === 'notes') { const p = prevTake(t); if (p && p.notes && p.notes !== t.notes) top = `<button class="chip last" data-prevnote>= Take ${h(takeLabel(p))}: ${h(p.notes.slice(0, 40))}${p.notes.length > 40 ? '…' : ''}</button>`; }
-  const chips = f.list ? ordered(f.list).filter(v => v !== s).map(v => `<button class="chip ${v === t[k] ? 'on' : ''}" data-v="${h(v)}">${h(show(k, v))}</button>`).join('') : '';
+  const chips = f.list ? S.lists[f.list].filter(v => v !== s).map(v => `<button class="chip ${v === t[k] ? 'on' : recentCls(f.list, v)}" data-v="${h(v)}">${h(show(k, v))}</button>`).join('') : '';
   const range = f.range ? `<button class="chip" data-k="→">→ to (range)</button>${k === 'focus' ? '<button class="chip" data-k="∞">∞</button>' : ''}` : '';
   let input = '';
   if (f.kind === 'text') input = `<input class="p-text" id="ptext" value="${h(t[k])}" placeholder="${h(f.ph || '')}" autocomplete="off" autocapitalize="off">`;
@@ -560,7 +642,7 @@ function panelStop(t) {
   const s = t.sug.stop, cur = t.stop || '';
   const [base, fr] = cur.split(' ');
   const cine = S.stopStyle !== 'decimal';
-  const rec = ordered('stops', Object.keys(S.used).filter(x => x.startsWith('stops|')).map(x => x.slice(6))).slice(0, 4);
+  const rec = Object.keys(S.used).filter(x => x.startsWith('stops|')).sort((a, b) => S.used[b] - S.used[a]).map(x => x.slice(6)).slice(0, 4);   // a row of its own: here newest first is the point
   const body = `${s && !has(t, 'stop') ? `<div class="chips"><button class="chip last" data-same>Last: ${h(fmtStop(s))}</button></div>` : ''}
     ${rec.length ? `<div class="p-sub">Recent</div><div class="chips">${rec.map(v => `<button class="chip ${v === cur ? 'on' : ''}" data-full="${h(v)}">${h(fmtStop(v))}</button>`).join('')}</div>` : ''}
     <div class="p-sub">${cine ? 'Stop' : 'Stop · decimal'}</div><div class="chips">${(cine ? FULL : THIRDS).map(v => `<button class="chip ${v === base ? 'on' : ''}" data-base="${v}">${v}</button>`).join('')}</div>
@@ -581,20 +663,20 @@ function panelFilters(t) {   // type to search the families ("cl" → Clear, Cla
   let fam = null, q = '';
   const draw = () => {
     const rows = t.filters.map((x, i) => `<button class="chip on" data-del="${i}">${h(x.fam)} ${h(x.dens)} ✕</button>`).join('');
-    const all = ordered('fam', Object.keys(S.families)), ql = q.toLowerCase();
+    const all = Object.keys(S.families), ql = q.toLowerCase();
     const famList = ql ? all.filter(f => f.toLowerCase().includes(ql) || (SHORT[f] || '').toLowerCase().startsWith(ql)) : all;
     const body = (s && !t.filters.length ? `<div class="chips"><button class="chip last" data-same>Last: ${h(shortFilters(s))}</button></div>` : '') +
       (rows ? `<div class="chips">${rows}</div>` : '') +
-      (fam ? `<div class="p-sub">${h(fam)} · strength</div><div class="chips">${ordered('dens:' + fam, S.families[fam]).map(d => `<button class="chip" data-dens="${h(d)}">${h(FR[d] || d)}</button>`).join('')}</div>`
+      (fam ? `<div class="p-sub">${h(fam)} · strength</div><div class="chips">${S.families[fam].map(d => `<button class="chip ${recentCls('dens:' + fam, d, S.families[fam])}" data-dens="${h(d)}">${h(FR[d] || d)}</button>`).join('')}</div>`
         : `<input class="p-text" id="fq" placeholder="Search or add a filter" value="${h(q)}" autocomplete="off">
-          <div class="chips" style="margin-top:8px">${famList.map(v => `<button class="chip" data-fam="${h(v)}">${h(v)}${S.families[v].length ? '' : ' <small>· adds now</small>'}</button>`).join('')}
+          <div class="chips" style="margin-top:8px">${famList.map(v => `<button class="chip ${recentCls('fam', v, all)}" data-fam="${h(v)}">${h(v)}${S.families[v].length ? '' : ' <small>· adds now</small>'}</button>`).join('')}
           ${q && !all.some(f => f.toLowerCase() === ql) ? `<button class="chip last" data-newfam>+ Add “${h(q)}”</button>` : ''}</div>`);
     panelShell(t, 'filters', 'Filter · in matte box order', shortFilters(t.filters) || (s ? shortFilters(s) : '—'), body, !t.filters.length);
     const p = $('#panel');
-    const push = (f, d) => { t.filters.push({ fam: f, dens: d }); fam = null; q = ''; delete t.sug.filters; save(); renderTake(t); draw(); };
+    const push = (f, d) => { checkpoint('filter', t.id + '|filters'); t.filters.push({ fam: f, dens: d }); fam = null; q = ''; delete t.sug.filters; save(); renderTake(t); draw(); };
     p.querySelectorAll('[data-fam]').forEach(b => b.onclick = () => { const f = b.dataset.fam; markUsed('fam', f); if (!S.families[f].length) push(f, ''); else { fam = f; draw(); } });
     p.querySelectorAll('[data-dens]').forEach(b => b.onclick = () => { markUsed('dens:' + fam, b.dataset.dens); push(fam, b.dataset.dens); });
-    p.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { t.filters.splice(+b.dataset.del, 1); save(); renderTake(t); draw(); });
+    p.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { checkpoint('filter', t.id + '|filters'); t.filters.splice(+b.dataset.del, 1); save(); renderTake(t); draw(); });
     const nf = p.querySelector('[data-newfam]'); if (nf) nf.onclick = () => { S.families[q] = []; push(q, ''); };
     const sm = p.querySelector('[data-same]'); if (sm) sm.onclick = () => { t.filters = JSON.parse(JSON.stringify(s)); delete t.sug.filters; save(); renderTake(t); draw(); };
     const fq = p.querySelector('#fq'); if (fq) { fq.oninput = () => { q = fq.value.trim(); draw(); const n = $('#fq'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }; }
@@ -603,14 +685,22 @@ function panelFilters(t) {   // type to search the families ("cl" → Clear, Cla
   draw();
 }
 
-function panelTake(t) {
-  const body = `<div class="p-sub">What was this clip</div><div class="chips">${TYPES.map(([v, , en]) => `<button class="chip ${t.type === v ? 'on' : ''}" data-type="${v}">${h(v === 'Disparo' ? 'False start' : v === 'Claquete' ? 'Claquete' : en)}</button>`).join('')}</div>
+function panelTake(t) {   // type, circle, and the take and clip numbers by hand (the takes after count on from them)
+  const num = (id, label, v, man) => `<div class="numrow"><span class="lbl">${label}</span><button class="x" data-step="${id}|-1" aria-label="${label} minus">−</button>
+    <input id="${id}" inputmode="numeric" value="${v}"><button class="x" data-step="${id}|1" aria-label="${label} plus">+</button>
+    ${man ? `<button class="pbtn" data-auto="${id}">Auto</button>` : '<span class="auto">auto</span>'}</div>`;
+  const body = `<div class="p-sub">What was this clip</div><div class="chips">${TYPES.map(([v, , en]) => `<button class="chip ${t.type === v ? 'on' : ''}" data-type="${v}">${h(en)}</button>`).join('')}</div>
     <div class="p-sub">Circle</div><div class="chips"><button class="chip ${t.circled ? 'on' : ''}" id="circ2">${t.circled ? '● Circled' : 'Circle this take'}</button></div>
-    <p style="margin:8px 4px 0;font-size:13px;color:var(--muted)">Claquete and false start don't use a take number: changing one renumbers the takes after it. Clip numbers follow the roll.</p>`;
+    <div class="p-sub">Numbers</div>${NO_NUMBER.includes(t.type) ? '' : num('tn', 'Take', takeNo(t), t.takeN)}${num('cn', 'Clip', clipNo(t), t.clipN)}
+    <p style="margin:8px 4px 0;font-size:13px;color:var(--muted)">Slate only and false start don't use a take number: changing one renumbers the takes after it. A number typed here holds, and the next ones count on from it.</p>`;
   panelShell(t, 'take', 'Take · Clip', `${takeLabel(t)} · ${pad3(clipNo(t))}`, body, false, true);
-  const p = $('#panel');
-  p.querySelectorAll('[data-type]').forEach(b => b.onclick = () => { t.type = b.dataset.type; save(); renderTake(t); panelTake(t); fitPanel('take'); });
-  $('#circ2').onclick = () => { t.circled = !t.circled; save(); renderTake(t); panelTake(t); fitPanel('take'); };
+  const p = $('#panel'), again = () => { save(); renderTake(t); panelTake(t); fitPanel('take'); };
+  p.querySelectorAll('[data-type]').forEach(b => b.onclick = () => { checkpoint('take type'); t.type = b.dataset.type; again(); });
+  $('#circ2').onclick = () => { checkpoint(t.circled ? 'uncircle' : 'circle'); t.circled = !t.circled; again(); };
+  const setN = (id, v) => { v = Math.max(1, Math.round(Number(v) || 0)); if (!v) return; checkpoint(id === 'tn' ? 'take number' : 'clip number'); if (id === 'tn') t.takeN = v; else t.clipN = v; again(); };
+  p.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { const [id, d] = b.dataset.step.split('|'); setN(id, (id === 'tn' ? takeNo(t) : clipNo(t)) + Number(d)); });
+  p.querySelectorAll('.numrow input').forEach(inp => inp.onchange = () => setN(inp.id, inp.value));
+  p.querySelectorAll('[data-auto]').forEach(b => b.onclick = () => { checkpoint('auto number'); if (b.dataset.auto === 'tn') delete t.takeN; else delete t.clipN; again(); });
 }
 
 /* ---------- DAY PLAN: the call sheet's scenes, found without AI ---------- */
@@ -722,11 +812,8 @@ function viewSetup() {
     <label class="field"><span>Project</span><input id="pname" value="${h(S.project)}"></label>
     <div class="field"><span>Look</span><div class="seg" id="theme"><button data-v="dark" class="${S.theme !== 'light' ? 'on' : ''}">Night (ShotSize)</button><button data-v="light" class="${S.theme === 'light' ? 'on' : ''}">Day (paper)</button></div></div>
     <div class="field"><span>Cameras · letter, color, format, defaults for a new scene</span>
-      ${S.cameras.map((c, i) => `<div class="camcard"><div class="camrow"><input type="text" data-cl="${i}" value="${h(c.l)}" style="width:56px;flex:none;text-transform:uppercase" aria-label="Letter">
-        <input type="color" data-cc="${i}" value="${h(c.color)}" aria-label="Color"><input type="text" data-cf="${i}" value="${h(c.format)}" placeholder="e.g. Venice 2 · 6K 17:9" aria-label="Format">
-        <button class="x" data-cdel="${i}" aria-label="Remove camera">×</button></div>
-        <div class="camrow defs">${CAMSET.map(k => `<label><i>${F[k].label}</i><input type="text" inputmode="decimal" data-cd="${i}|${k}" value="${h(c[k] || '')}"></label>`).join('')}</div></div>`).join('')}
-      <button class="pbtn" id="addcam" style="padding:0">+ Camera</button></div>
+      <button class="btn" id="cams" style="width:100%">${S.cameras.map(c => `<b style="color:${c.color}">${h(c.l)}</b>`).join(' · ')} · Edit cameras</button></div>
+    <div class="field"><span>Lists on the day page</span><div class="seg" id="order"><button data-v="1" class="${S.newestFirst ? 'on' : ''}">Newest on top</button><button data-v="0" class="${S.newestFirst ? '' : 'on'}">Oldest on top</button></div></div>
     <div class="field"><span>A new scene starts at shot</span><div class="seg" id="shotstart"><button data-v="1" class="${S.shotStart !== 'A' ? 'on' : ''}">1</button><button data-v="A" class="${S.shotStart === 'A' ? 'on' : ''}">A</button></div></div>
     <div class="field"><span>Fields on the take page</span><div class="checks">${HIDEABLE.map(k => `<button class="chip ${visible(k) ? 'on' : ''}" data-hide="${k}">${F[k].label}</button>`).join('')}</div></div>
     <label class="field"><span>Filter families · "Family: strengths" one per line (no strengths = goes in at once)</span><textarea id="fams" style="min-height:180px">${h(famText)}</textarea></label>
@@ -736,14 +823,8 @@ function viewSetup() {
   $('#pname').oninput = ev => { S.project = ev.target.value || 'Untitled project'; save(); };
   $('#theme').querySelectorAll('button').forEach(b => b.onclick = () => { S.theme = b.dataset.v; save(); applyTheme(); viewSetup(); });
   $('#shotstart').querySelectorAll('button').forEach(b => b.onclick = () => { S.shotStart = b.dataset.v; save(); viewSetup(); });
-  document.querySelectorAll('[data-cl]').forEach(i => i.onchange = () => { const v = i.value.trim().toUpperCase(); if (v) { const c = S.cameras[+i.dataset.cl], old = c.l; c.l = v;
-    S.takes.forEach(t => { if (t.cam === old) t.cam = v; }); S.rolls.forEach(x => { if (x.cam === old) x.cam = v; }); if (S.roll[old]) { S.roll[v] = S.roll[old]; delete S.roll[old]; } if (S.camera === old) S.camera = v; save(); } });
-  document.querySelectorAll('[data-cc]').forEach(i => i.oninput = () => { S.cameras[+i.dataset.cc].color = i.value; save(); });
-  document.querySelectorAll('[data-cf]').forEach(i => i.oninput = () => { S.cameras[+i.dataset.cf].format = i.value; save(); });
-  document.querySelectorAll('[data-cd]').forEach(i => i.oninput = () => { const [n, k] = i.dataset.cd.split('|'); S.cameras[+n][k] = i.value.trim(); save(); });
-  document.querySelectorAll('[data-cdel]').forEach(b => b.onclick = () => { if (S.cameras.length > 1 && confirm('Remove this camera from the list? Its takes stay.')) { S.cameras.splice(+b.dataset.cdel, 1); S.camera = S.cameras[0].l; save(); viewSetup(); } });
-  $('#addcam').onclick = () => { const used = S.cameras.map(c => c.l); const l = 'ABCDEFGHIJ'.split('').find(x => !used.includes(x)) || 'X';
-    S.cameras.push({ l, color: PALETTE[S.cameras.length % PALETTE.length], format: '', fps: '24', shutter: '180', wb: '5600', iso: '800' }); save(); viewSetup(); };
+  $('#cams').onclick = () => cameraSheet(S.camera || S.cameras[0].l);
+  $('#order').querySelectorAll('button').forEach(b => b.onclick = () => { S.newestFirst = b.dataset.v === '1'; save(); viewSetup(); });
   document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => { const k = b.dataset.hide; S.hidden = visible(k) ? [...S.hidden, k] : S.hidden.filter(x => x !== k); save(); viewSetup(); });
   $('#fams').onchange = ev => {
     const fams = {};
@@ -758,13 +839,14 @@ function viewHelp() {
   closePanel();
   $('#app').innerHTML = `<header class="top"><button class="nav l" onclick="go('')">‹ Day</button><h1>How it works</h1><span></span></header>
     <main class="help">
-    <p><b>Day page</b> = rolls and scenes. Pick the camera at the top (or all of them). <b>+ Roll</b> starts a card (the next number is
+    <p><b>UNDO</b> (top) walks back your last changes, one at a time, until you close the app.</p>
+    <p><b>Day page</b> = rolls and scenes. Newest on top (Setup can turn it around). Pick the camera at the top (or all of them); <b>⋮</b> next to them edits the cameras (color, format, defaults). <b>+ Roll</b> starts a card (the next number is
     suggested). Inside the roll, <b>+ Scene</b> starts a scene at shot 1. <b>Continue</b> (bottom) opens the last take.
     Tap a take to open it, the details to read everything, <b>⋮</b> on a roll to rename, share or delete it.</p>
     <p><b>Day plan</b>: choose the call sheet PDF. The app finds the day's scenes (no AI, nothing leaves the phone); you confirm the list.
     Those scenes show first in <b>+ Scene</b>.</p>
     <p><b>Take page</b> = takes and shots. <b>+</b> on Scene, Shot and Take, and the big <b>+ Take</b> at the bottom (a copy of this take).
-    In Take · Clip, <b>‹ ›</b> walk through the roll; tap the box to mark claquete, false start, MOS… <b>○</b> circles, the bin deletes (with Undo).</p>
+    In Take · Clip, <b>‹ ›</b> walk through the roll; tap the number to mark slate only, false start, MOS… or type the take and clip numbers. <b>○</b> circles, the bin deletes (with Undo).</p>
     <p><b>+ Shot</b>: everything from the shot before comes in grey, camera settings too: nothing is saved without a tap.
     The yellow box lists the values; <b>Repeat all</b> keeps them (change the lens first, and Repeat fills the rest), or fill one by one.</p>
     <p><b>Focus, height, tilt</b>: <b>→</b> makes a range (5 → 2 m). <b>Filter</b>: type to search; Clear and Pola go in at once.</p>
@@ -827,7 +909,7 @@ function exportPDF(list) {
 }
 
 /* ---------- router ---------- */
-function route() {
+function route(keepScroll) {
   closeSheet();
   const [v, a, b] = location.hash.replace(/^#\/?/, '').split('/');
   if (v === 't') viewTake(a, b);
@@ -835,10 +917,10 @@ function route() {
   else if (v === 'help') viewHelp();
   else if (v === 'plan') viewPlan();
   else { planDraft = null; viewDay(); }
-  if (v !== 't' || !b) scrollTo(0, 0);
+  if (!keepScroll && (v !== 't' || !b)) scrollTo(0, 0);
 }
 applyTheme();
-addEventListener('hashchange', route);
+addEventListener('hashchange', () => route());
 route();
 
 // Offline cache only when published (https), so edits show up while testing on localhost.
