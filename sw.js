@@ -1,6 +1,6 @@
 // Offline cache for the boletim prototype. Bump CACHE when any file changes.
-const CACHE = 'boletim-proto-11';
-const FILES = ['./', 'index.html', 'style.css?v=11', 'app.js?v=11', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'boletim-proto-12';
+const FILES = ['./', 'index.html', 'style.css?v=12', 'app.js?v=12', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
@@ -8,7 +8,8 @@ self.addEventListener('activate', e => e.waitUntil(
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   // Pages: network first so a new version shows up; cache when offline.
-  if (e.request.mode === 'navigate') return e.respondWith(fetch(e.request).catch(() => caches.match('index.html')));
+  // GitHub Pages lets browsers keep a page 10 minutes: skip that cache, so a new version shows the next time it opens
+  if (e.request.mode === 'navigate') return e.respondWith(fetch(e.request, { cache: 'no-store' }).catch(() => caches.match('index.html')));
   e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
     if (res.ok && (e.request.url.startsWith(self.location.origin) || e.request.url.includes('fonts.g') || e.request.url.includes('cdnjs.cloudflare.com'))) {
       const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy));
