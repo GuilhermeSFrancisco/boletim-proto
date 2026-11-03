@@ -215,11 +215,12 @@ function blank(l) {
 const lastOf = l => S.takes.filter(t => !l || t.cam === l).pop();
 function insertAfterCam(t) { S.takes.push(t); save(); return t; }
 
-function addTake(from) {          // the next take is a copy of this one; only notes and TC start empty
+function addTake(from, insert) {  // the next take is a copy of this one; only notes and TC start empty
   const t = blank(from.cam);
   for (const k of ORDER) if (k !== 'notes' && k !== 'tc') t[k] = k === 'filters' ? JSON.parse(JSON.stringify(from.filters)) : from[k];
   t.tags = (from.tags || []).filter(x => KEEP_TAGS.includes(x));
   t.sug = JSON.parse(JSON.stringify(from.sug || {})); t.noRepeat = from.noRepeat;
+  if (insert) { S.takes.splice(S.takes.indexOf(from) + 1, 0, t); save(); return t; }   // clip numbers after it move up
   return insertAfterCam(t);
 }
 function suggestFrom(t, from) {   // every value of the take before goes in grey: one tap (Repeat) keeps them
@@ -513,7 +514,7 @@ function renderTake(t) {
   const list = S.takes.filter(x => x.cam === t.cam && x.roll === t.roll), i = list.indexOf(t);
   const c = cam(t.cam), ty = typeOf(t.type), p = prevTake(t);
   // ‹ take · clip › with + on top, like Scene and Shot; tapping the middle opens type, circle and the numbers
-  const takeBox = `<div class="tf big takebox ${active === 'take' ? 'active' : ''}" data-f="take"><span class="lbl">Take ✎</span>
+  const takeBox = `<div class="tf big takebox ${active === 'take' ? 'active' : ''}" data-f="take"><span class="lbl">Take · Clip</span>
     <span class="plus" data-add="take" role="button" aria-label="New take">+</span>
     <div class="tline"><button class="tnav" data-nav="-1" ${i > 0 ? '' : 'disabled'} aria-label="Previous take">‹</button>
       <span class="tmid"><span class="tno ${t.circled ? 'circ' : ''}">${h(takeLabel(t))}</span><span class="cno">${pad3(clipNo(t))}</span>
@@ -527,7 +528,7 @@ function renderTake(t) {
       `<div class="tf roll-f ${active === 'roll' ? 'active' : ''}" style="--roll-color:${c.color}" data-f="roll"><span class="lbl">Roll</span><span class="v">${h(t.roll)}</span>
         <span class="plus" data-add="roll" role="button" aria-label="New roll">+</span></div>`]) +
     row('', [fieldHTML(t, 'scene', true, '<span class="plus" data-add="scene" role="button" aria-label="New scene">+</span>'),
-      fieldHTML(t, 'shot', true, '<span class="plus" data-add="shot" role="button" aria-label="New shot">+</span>'), takeBox]) +
+      fieldHTML(t, 'shot', true, '<span class="plus" data-add="shot" role="button" aria-label="New shot">+</span>'), takeBox]).replace('class="tr c3"', 'class="tr sst"') +
     (t.scene ? `<div class="tr c1"><button class="scdesc" data-scdesc><span class="lbl">Scene ${h(t.scene)}</span><span>${h(sd || 'Add a scene description')}</span></button></div>` : '') +
     row('', CAMSET.map(k => fieldHTML(t, k))) +
     row('', ['lens', 'stop', 'filters'].map(k => fieldHTML(t, k, true))) +
@@ -553,10 +554,25 @@ function renderTake(t) {
 function doAdd(t, what) {
   closePanel();
   if (what === 'take' || what === 'shot') checkpoint('+ ' + what);
-  if (what === 'take') { const n = addTake(t); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))}`); go('t/' + n.id); }
+  if (what === 'take') {
+    const last = lastOf(t.cam);
+    if (last && last !== t) return insertSheet(t, last);
+    const n = addTake(t); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))}`); go('t/' + n.id);
+  }
   if (what === 'shot') { const n = addShot(t); go('t/' + n.id); }
   if (what === 'scene') sceneSheet(t.cam);
   if (what === 'roll') rollSheet(t.cam, t);
+}
+
+function insertSheet(t, last) {   // + Take on a take that isn't the camera's last one: a forgotten take, or the scene again later?
+  let at = t; for (let i = S.takes.indexOf(t) + 1; i < S.takes.length; i++) { const x = S.takes[i]; if (x.cam !== t.cam) continue; if (sameShot(x, t) && x.roll === t.roll) at = x; else break; }
+  const after = S.takes.filter((x, i) => i > S.takes.indexOf(at) && x.cam === t.cam && x.roll === t.roll);
+  sheet(`+ Take on ${t.scene || '—'} / ${t.shot || '—'}`, `<p>The camera's last take is ${h(last.scene || '—')} / ${h(last.shot || '—')} · clip ${pad3(clipNo(last))}.</p>
+    <button class="btn primary" id="ins">Forgotten take: insert after take ${h(takeLabel(at))} (clip ${pad3(clipNo(at) + 1)})${after.length ? `<small><br>clips after it move up: ${h([...new Set(after.map(x => x.scene + '/' + x.shot))].join(', '))}</small>` : ''}</button>
+    <button class="btn" id="end">Shot again now: add at the end (clip ${pad3(clipNo(last) + 1)})</button>`, el => {
+    el.querySelector('#ins').onclick = () => { checkpoint('insert take'); closeSheet(); const n = addTake(at, true); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))} inserted`); go('t/' + n.id); };
+    el.querySelector('#end').onclick = () => { checkpoint('+ take'); closeSheet(); const n = addTake(at); toast(`Take ${takeLabel(n)} · clip ${pad3(clipNo(n))}`); go('t/' + n.id); };
+  });
 }
 
 function takeToolbar(t) {   // the big + Take stays at the bottom, in reach of the thumb; Repeat shows above it while there is grey
@@ -748,11 +764,11 @@ function panelTake(t) {   // type, circle, and the take and clip numbers by hand
   const num = (id, label, v, man) => `<div class="numrow"><span class="lbl">${label}</span><button class="x" data-step="${id}|-1" aria-label="${label} minus">−</button>
     <input id="${id}" inputmode="numeric" value="${v}"><button class="x" data-step="${id}|1" aria-label="${label} plus">+</button>
     ${man ? `<button class="pbtn" data-auto="${id}">Auto</button>` : '<span class="auto">auto</span>'}</div>`;
-  const body = `<div class="p-sub">This clip is · only Take uses a number</div><div class="seg wrap">${TYPES.map(([v, , en]) => `<button class="${t.type === v ? 'on' : ''}" data-type="${v}">${h(en)}</button>`).join('')}</div>
+  const body = `<div class="p-sub">Numbers</div>${NO_NUMBER.includes(t.type) ? '' : num('tn', 'Take', takeNo(t), t.takeN)}${num('cn', 'Clip', clipNo(t), t.clipN)}
+    <div class="p-sub">This clip is · only Take uses a number</div><div class="seg wrap">${TYPES.map(([v, , en]) => `<button class="${t.type === v ? 'on' : ''}" data-type="${v}">${h(en)}</button>`).join('')}</div>
     ${t.type === 'Take' ? `<div class="p-sub">Marks · as many as needed, numbering stays</div><div class="chips">${TAGS.map(([k, , en]) => `<button class="chip ${(t.tags || []).includes(k) ? 'on' : ''}" data-tag="${k}">${h(en)}</button>`).join('')}</div>` : ''}
     <div class="p-sub">Circle</div><div class="chips"><button class="chip ${t.circled ? 'on' : ''}" id="circ2">${t.circled ? '● Circled' : 'Circle this take'}</button></div>
     ${S.cameras.length > 1 ? `<div class="p-sub">Wrong camera?</div><div class="chips">${S.cameras.filter(c => c.l !== t.cam).map(c => `<button class="chip" data-move="${h(c.l)}">Move to Cam ${h(c.l)} · ${h(curRoll(c.l))}</button>`).join('')}</div>` : ''}
-    <div class="p-sub">Numbers</div>${NO_NUMBER.includes(t.type) ? '' : num('tn', 'Take', takeNo(t), t.takeN)}${num('cn', 'Clip', clipNo(t), t.clipN)}
     <p style="margin:8px 4px 0;font-size:13px;color:var(--muted)">Accidental roll (disparo), slate only and test are clips, not takes: they don't use a number, and changing one renumbers the takes after it. A number typed here holds, and the next ones count on from it.</p>`;
   panelShell(t, 'take', 'Take · Clip', `${takeLabel(t)} · ${pad3(clipNo(t))}`, body, false, true);
   const p = $('#panel'), again = () => { save(); renderTake(t); panelTake(t); fitPanel('take'); };

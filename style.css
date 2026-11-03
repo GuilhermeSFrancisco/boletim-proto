@@ -317,3 +317,10 @@ header.top .hbtns .nav.undo { font-size: 13px; min-width: 0; padding: 0 8px; gap
 .rt .tc-cell button { -webkit-touch-callout: none; }
 .seg.wrap { flex-wrap: wrap; } .seg.wrap button { flex: 1 1 45%; min-height: 44px; }
 .tk { height: auto; min-height: 28px; padding: 3px 8px; white-space: normal; text-align: center; line-height: 1.2; }
+/* scene · shot · take row: the take box gets the room (arrows, number, +) */
+.tr.sst { grid-template-columns: .8fr .8fr 1.9fr; }
+.tr.sst .tf.big .v { font-size: 28px; }
+.takebox .tline { grid-template-columns: 40px 1fr 40px; }
+.takebox .tmid { cursor: pointer; padding: 2px 0; }
+.takebox .tno { font-size: 34px; }
+.tr.sst .tf:not(.takebox) .plus { width: 30px; height: 28px; top: 3px; right: 3px; } .tr.sst .tf:not(.takebox) .lbl { font-size: 10px; }
