@@ -1,6 +1,6 @@
 // Offline cache for the boletim prototype. Bump CACHE when any file changes.
-const CACHE = 'boletim-proto-7';
-const FILES = ['./', 'index.html', 'style.css?v=7', 'app.js?v=7', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'boletim-proto-9';
+const FILES = ['./', 'index.html', 'style.css?v=9', 'app.js?v=9', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(

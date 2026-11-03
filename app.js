@@ -1,4 +1,4 @@
-/* Boletim de câmera — prototype v4. Standalone PWA, data only on this device (localStorage).
+/* Boletim de câmera — prototype v6. Standalone PWA, data only on this device (localStorage).
    Every TAKE holds its own values and inherits from the take before. The DAY page holds rolls and scenes (one sheet per
    roll, like the APACERJ paper report); the TAKE page holds takes and shots. A call sheet PDF gives the day's scenes. */
 'use strict';
@@ -7,9 +7,15 @@ const KEY = 'boletim-proto-v4', OLD_KEY = 'boletim-proto-v3';
 // ShotSize's own colours (amber, Signal Blue, green, Machine Yellow, red, light blue, white, grey); any other can be picked
 const PALETTE = ['#F28A2E', '#2E9BE6', '#3FBF7F', '#FFC91F', '#E5484D', '#9AD3F7', '#F8F8F8', '#7A7A82'];
 // [value, label on the sheet, English name (screen and CSV take type)]
-const TYPES = [['Take', '', 'Take'], ['Claquete', 'slate', 'Slate only'], ['Disparo', 'false', 'False start'], ['MOS', 'MOS', 'MOS'],
-  ['Tail', 'tail', 'Tail slate'], ['Pickup', 'PU', 'Pickup'], ['Insert', 'ins', 'Insert'], ['VFX', 'VFX', 'VFX plate'], ['Wild', 'wild', 'Wild'], ['Test', 'test', 'Test']];
-const NO_NUMBER = ['Claquete', 'Disparo', 'Wild', 'Test'];                 // these don't use up a take number
+// What the clip IS (one of these): anything but Take is not a take and doesn't use up a number. Disparo = accidental roll
+// (REC hit by mistake, or cut before the slate). A slated take that went wrong is still a take (Brazilian practice).
+const TYPES = [['Take', '', 'Take'], ['Disparo', 'acc', 'Accidental roll'], ['Claquete', 'slate', 'Slate only'], ['Test', 'test', 'Test']];
+const NO_NUMBER = ['Disparo', 'Claquete', 'Test'];
+// Marks that only describe a take (any number of them); the numbering doesn't change. [key, on the sheet, English]
+const TAGS = [['NoSlate', 'no slate', 'No slate'], ['Tail', 'end slate', 'End slate'], ['MOS', 'MOS', 'MOS'], ['Pickup', 'PU', 'Pickup'],
+  ['Insert', 'ins', 'Insert'], ['VFX', 'VFX', 'VFX plate'], ['Wild', 'wild', 'Wild']];
+const KEEP_TAGS = ['MOS', 'Insert', 'VFX', 'Wild'];   // + Take carries these on; no slate, end slate and pickup are per take
+const tagsOf = t => (t.tags || []).map(k => TAGS.find(x => x[0] === k)).filter(Boolean);
 const DETAIL = ['lens', 'stop', 'filters', 'focus', 'height', 'tilt', 'fps', 'shutter', 'wb', 'iso', 'lut'];   // a change here splits the details block
 const CAMSET = ['fps', 'shutter', 'wb', 'iso'];
 // + Shot offers all of these in grey (nothing is saved without a tap); Repeat fills them at once
@@ -95,6 +101,11 @@ function load() {
   if (!s) return d;
   for (const k in d) if (!(k in s)) s[k] = d[k];
   for (const c of s.cameras) for (const k of CAMSET) if (!(k in c)) c[k] = '';
+  s.takes.forEach(t => {   // v5: MOS, pickup… were types; now they are marks on a take
+    if (t.type === 'Acidental') t.type = 'Disparo';
+    if (TAGS.some(x => x[0] === t.type)) { t.tags = [...new Set([...(t.tags || []), t.type])]; t.type = 'Take'; }
+    if (!t.tags) t.tags = [];
+  });
   if (!s.families['Classic Soft']) s.families['Classic Soft'] = d.families['Classic Soft'];
   // the prototype's earlier default colours become the app palette (a colour the user picked stays)
   const OLD = ['#E8590C', '#1C7ED6', '#3E8E3E', '#C08A12', '#7D55B8', '#C2447A', '#2B9A93', '#55555C', '#B5452E', '#2E7FC4'];
@@ -130,7 +141,7 @@ const take = id => S.takes.find(t => t.id === id);
 const sameShot = (a, b) => a.cam === b.cam && a.scene === b.scene && a.shot === b.shot;
 // A number typed by hand (takeN / clipN) holds for that take, and the ones after it count on from it.
 function clipNo(t) { let n = 0; for (const x of S.takes) { if (x.cam === t.cam && x.roll === t.roll) n = x.clipN ? Number(x.clipN) : n + 1; if (x === t) return n; } return n; }
-function takeNo(t) {   // slate only / false start / wild don't use up a number; reclassifying one renumbers the takes after it
+function takeNo(t) {   // slate only / no slate (disparo) / wild don't use up a number; reclassifying one renumbers the takes after it
   let n = 0;
   for (const x of S.takes) {
     if (!sameShot(x, t)) continue;
@@ -140,7 +151,7 @@ function takeNo(t) {   // slate only / false start / wild don't use up a number;
   return n + 1;
 }
 const typeOf = v => TYPES.find(x => x[0] === v) || TYPES[0];
-function takeLabel(t) { const ty = typeOf(t.type); return NO_NUMBER.includes(t.type) ? ty[1] : String(takeNo(t)) + (ty[1] ? ' ' + ty[1] : ''); }
+function takeLabel(t) { const ty = typeOf(t.type); return NO_NUMBER.includes(t.type) ? ty[1] : [String(takeNo(t)), ...tagsOf(t).map(x => x[1])].join(' '); }
 
 // Filters: full names in the CSV, short form on screen ("ND1.2 · Clr · BSat ¼")
 const SHORT = { 'Clear': 'Clr', 'Pola': 'Pol', 'Pola rotate': 'Pol rot', 'Glimmerglass': 'Glim', 'Black Pro-Mist': 'BPM', 'Hollywood Black Magic': 'HBM',
@@ -196,7 +207,7 @@ function rollsOn(date, l) {   // rolls of one camera on one day: the ones with t
 
 /* ---------- creating takes ---------- */
 function blank(l) {
-  const t = { id: uid(), cam: l, roll: curRoll(l), date: today(), created: stamp(), type: 'Take', circled: false, filters: [], sug: {} };
+  const t = { id: uid(), cam: l, roll: curRoll(l), date: today(), created: stamp(), type: 'Take', tags: [], circled: false, filters: [], sug: {} };
   for (const k of ORDER) if (!(k in t)) t[k] = '';
   if (!S.rolls.some(x => x.cam === l && x.roll === t.roll && x.date === t.date)) S.rolls.push({ cam: l, roll: t.roll, date: t.date });
   return t;
@@ -207,6 +218,7 @@ function insertAfterCam(t) { S.takes.push(t); save(); return t; }
 function addTake(from) {          // the next take is a copy of this one; only notes and TC start empty
   const t = blank(from.cam);
   for (const k of ORDER) if (k !== 'notes' && k !== 'tc') t[k] = k === 'filters' ? JSON.parse(JSON.stringify(from.filters)) : from[k];
+  t.tags = (from.tags || []).filter(x => KEEP_TAGS.includes(x));
   t.sug = JSON.parse(JSON.stringify(from.sug || {})); t.noRepeat = from.noRepeat;
   return insertAfterCam(t);
 }
@@ -314,7 +326,13 @@ function viewDay() {
 
   const cur = lastOf(S.camera);
   setToolbar(cur ? `<button class="tbtn primary wide" id="cont"><span class="small">CONTINUE</span><span>Cam ${h(cur.cam)} · Scene ${h(cur.scene || '—')} · Shot ${h(cur.shot || '—')} · Take ${h(takeLabel(cur))}</span><span class="chev">›</span></button>` : '');
-  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => go('t/' + b.dataset.t));
+  document.querySelectorAll('[data-t]').forEach(b => {
+    let timer = null, held = false;
+    b.onpointerdown = () => { held = false; timer = setTimeout(() => { held = true; const t = take(b.dataset.t); checkpoint(t.circled ? 'uncircle' : 'circle'); t.circled = !t.circled; save(); viewDay(); toast(t.circled ? `Take ${takeLabel(t)} circled` : `Take ${takeLabel(t)} not circled`); }, 550); };
+    b.onpointerup = b.onpointerleave = b.onpointercancel = () => clearTimeout(timer);
+    b.oncontextmenu = ev => ev.preventDefault();
+    b.onclick = () => { if (!held) go('t/' + b.dataset.t); };
+  });
   document.querySelectorAll('[data-det]').forEach(b => b.onclick = () => detailSheet(b.dataset.det.split(',').map(take)));
   document.querySelectorAll('[data-rmenu]').forEach(b => b.onclick = () => { const [l, r] = b.dataset.rmenu.split('|'); rollMenu(l, r); });
   document.querySelectorAll('[data-newroll]').forEach(b => b.onclick = () => rollSheet(b.dataset.newroll));
@@ -367,7 +385,8 @@ function rollSheet(l, from) {   // + Roll: the next number is suggested; the sho
   const last = from || lastOf(l);
   sheet(`New roll · Cam ${l}`, `<div class="rollpick"><button class="x big" id="rprev" aria-label="Previous number">‹</button>
       <input id="nr" value="${h(nextRollName(l))}" autocapitalize="characters" aria-label="Roll"><button class="x big" id="rnext" aria-label="Next number">›</button></div>
-    <p>${S.roll[l] ? `Next after ${h(S.roll[l])}.` : 'First roll of this camera.'} Clip numbers start again at 001.</p>
+    <p>${S.roll[l] ? `Next after ${h(S.roll[l])}.` : 'First roll of this camera.'} Clip numbers start again at 001.
+</p>
     ${last ? `<button class="btn primary" id="same">Start · scene ${h(last.scene || '—')} / shot ${h(last.shot || '—')} goes on</button>
       <button class="btn" id="newsc">Start · new scene</button>` : '<button class="btn primary" id="newsc">Start roll</button>'}`, el => {
     const inp = el.querySelector('#nr');
@@ -384,21 +403,38 @@ function sceneSheet(l) {   // + Scene: no "next number" guess (scenes aren't sho
   const shotToday = new Set(S.takes.filter(t => t.date === today()).map(t => t.scene));
   const todo = plan.filter(p => !shotToday.has(p.id));
   const done = []; for (let i = S.takes.length - 1; i >= 0 && done.length < 6; i--) { const t = S.takes[i]; if (t.scene && !done.some(d => d.scene === t.scene)) done.push(t); }
+  const others = S.cameras.map(c => c.l).filter(x => x !== l).map(lastOf).filter(o => o && o.date === today() && o.scene);
   const c = cam(l);
   sheet(`New scene · Cam ${l} · ${curRoll(l)}`, `<div class="scgrid"><label class="scbox"><span class="lbl">Scene</span><input id="scn" autocomplete="off" autocapitalize="characters" placeholder="—"></label>
       <label class="scbox"><span class="lbl">Shot</span><input id="sht" value="${h(S.shotStart)}" autocomplete="off" autocapitalize="characters"></label></div>
     ${todo.length ? `<div class="p-sub">Today's plan · not shot yet</div><div class="chips">${todo.map(p => `<button class="chip plan" data-sc="${h(p.id)}" data-head="${h(p.head)}"><b>${h(p.id)}</b><small>${h(p.head)}</small></button>`).join('')}</div>` : ''}
-    ${done.length ? `<div class="p-sub">Already shot · back to it</div><div class="chips">${done.map(t => `<button class="chip" data-sc="${h(t.scene)}">${h(t.scene)} <small>· last shot ${h(t.shot || '—')}</small></button>`).join('')}</div>` : ''}
+    ${others.map(o => `<div class="join"><div class="p-sub">Same as Cam ${h(o.cam)} now · ${h(o.scene)} / ${h(o.shot)} · take ${h(takeLabel(o))}</div>
+      <div class="rowbtns"><button class="btn primary" data-join="${o.id}|now">Joins at take ${h(takeLabel(o))}</button>${S.takes.filter(x => sameShot(x, o)).length > 1 ? `<button class="btn" data-join="${o.id}|all">Rolled since take 1</button>` : ''}</div></div>`).join('')}
+    ${done.length ? `<div class="p-sub">Already shot · back to it</div><div class="chips">${done.map(t => `<button class="chip" data-sc="${h(t.scene)}" data-next="${h(nextShot(t.shot) || S.shotStart)}">${h(t.scene)} <small>· last shot ${h(t.shot || '—')}</small></button>`).join('')}</div>` : ''}
     <div class="p-sub">From Cam ${h(l)} defaults (Setup)</div>
     <div class="camdef">${CAMSET.map(k => `<span><i>${F[k].label}</i>${h(c[k] ? show(k, c[k]) : '—')}</span>`).join('')}</div>
     <button class="btn primary" id="go">Start scene · take 1</button>`, el => {
     const sc = el.querySelector('#scn'), sh = el.querySelector('#sht'); let head = '';
-    el.querySelectorAll('[data-sc]').forEach(b => b.onclick = () => { sc.value = b.dataset.sc; head = b.dataset.head || ''; el.querySelectorAll('[data-sc]').forEach(x => x.classList.toggle('on', x === b)); });
+    el.querySelectorAll('[data-join]').forEach(b => b.onclick = () => { const [id, how] = b.dataset.join.split('|'); closeSheet(); go('t/' + joinShot(l, take(id), how === 'all').id); });
+    el.querySelectorAll('[data-sc]').forEach(b => b.onclick = () => { sc.value = b.dataset.sc; sh.value = b.dataset.next || S.shotStart; head = b.dataset.head || ''; el.querySelectorAll('[data-sc]').forEach(x => x.classList.toggle('on', x === b)); });
     el.querySelector('#go').onclick = () => {   // no autofocus: an open keyboard swallowed the first tap on this button
       const s = sc.value.trim(); if (!s) { sc.focus(); return toast('Type the scene or pick one'); }
       checkpoint('new scene ' + s); const t = addScene(l, s, sh.value.trim(), head || planHead(s)); closeSheet(); go('t/' + t.id);
     };
   }, true);
+}
+
+function joinShot(l, o, fromStart) {   // the scene, shot, take numbers and types come from the other camera; lens and the rest don't (one lens set, two cameras)
+  checkpoint(`Cam ${l} joins ${o.scene}/${o.shot}`);
+  const list = fromStart ? S.takes.filter(x => sameShot(x, o)) : [o], c = cam(l);
+  let t = null;
+  list.forEach((a, i) => {
+    if (!t) { t = blank(l); t.scene = a.scene; t.shot = a.shot; t.desc = a.desc; suggestFrom(t, lastOf(l)); for (const k of CAMSET) if (c[k]) { t[k] = c[k]; delete t.sug[k]; }
+      if (!fromStart && !NO_NUMBER.includes(a.type)) t.takeN = takeNo(a); insertAfterCam(t); }
+    else t = addTake(t);
+    t.type = a.type; t.tags = [...(a.tags || [])];
+  });
+  save(); toast(`Cam ${l}: ${list.length} take${list.length > 1 ? 's' : ''} on ${o.scene} / ${o.shot}`); return t;
 }
 
 function projectSheet() {
@@ -481,7 +517,7 @@ function renderTake(t) {
     <span class="plus" data-add="take" role="button" aria-label="New take">+</span>
     <div class="tline"><button class="tnav" data-nav="-1" ${i > 0 ? '' : 'disabled'} aria-label="Previous take">‹</button>
       <span class="tmid"><span class="tno ${t.circled ? 'circ' : ''}">${h(takeLabel(t))}</span><span class="cno">${pad3(clipNo(t))}</span>
-      ${t.type !== 'Take' ? `<span class="typechip">${h(ty[2])}</span>` : ''}</span>
+      ${t.type !== 'Take' || tagsOf(t).length ? `<span class="typechip">${h([t.type !== 'Take' ? ty[2] : '', ...tagsOf(t).map(x => x[2])].filter(Boolean).join(' · '))}</span>` : ''}</span>
       <button class="tnav" data-nav="1" ${i < list.length - 1 ? '' : 'disabled'} aria-label="Next take">›</button></div></div>`;
   const sd = S.sceneDesc[t.scene];
   const prevNote = !t.notes && p && p.notes && visible('notes')
@@ -529,8 +565,18 @@ function takeToolbar(t) {   // the big + Take stays at the bottom, in reach of t
   const rep = ks.length && !t.noRepeat ? `<div class="repeat"><div class="rp-t"><b>From ${p && p.shot !== t.shot ? 'shot ' + h(p.shot || '—') : 'the take before'}, not saved yet</b><span>${ks.length} field${ks.length > 1 ? 's' : ''}</span></div>
       <div class="rp-v">${h(vals.join(' · '))}</div>
       <div class="rp-b"><button class="tbtn" id="onebyone">Fill one by one</button><button class="tbtn yellow" id="repeat">⟳ Repeat all</button></div></div>` : '';
-  setToolbar(`${rep}<button class="tbtn primary wide" id="addtake">+ Take</button>`);
+  const pr = PROP && PROP.tid === t.id ? PROP : null, prT = pr ? pr.ids.map(take).filter(Boolean) : [];
+  const prop = prT.length ? `<div class="repeat prop"><div class="rp-t"><b>${h(F[pr.k] ? F[pr.k].label : pr.k)} → ${h(show(pr.k, t[pr.k]) || '—')} on this take only</b></div>
+      <div class="rp-b"><button class="tbtn" id="propno">Only this take</button><button class="tbtn yellow" id="propyes">Also take${prT.length > 1 ? 's' : ''} ${h(prT.map(takeLabel).join(', '))}</button></div></div>` : '';
+  // the other cameras on this same shot right now: one tap adds the next take on all of them
+  const mates = S.cameras.map(c => c.l).filter(l => l !== t.cam).map(lastOf).filter(o => o && o.date === t.date && o.scene === t.scene && o.shot === t.shot);
+  const both = mates.length && t === lastOf(t.cam) ? `<button class="tbtn wide both" id="addboth">+ Take ${h([t.cam, ...mates.map(o => o.cam)].join(' + '))}</button>` : '';
+  setToolbar(`${prop}${rep}<div class="addrow">${both}<button class="tbtn primary wide" id="addtake">+ Take</button></div>`);
   $('#addtake').onclick = () => doAdd(t, 'take');
+  if ($('#addboth')) $('#addboth').onclick = () => { checkpoint('+ take on ' + [t.cam, ...mates.map(o => o.cam)].join('+')); mates.forEach(o => addTake(o));
+    const n = addTake(t); toast(`Take ${takeLabel(n)} on ${[t.cam, ...mates.map(o => o.cam)].join(' + ')}`); go('t/' + n.id); };
+  if ($('#propyes')) $('#propyes').onclick = () => { checkpoint('whole shot ' + pr.k); prT.forEach(x => { x[pr.k] = JSON.parse(valOf(t, pr.k)); delete x.sug[pr.k]; }); PROP = null; save(); renderTake(t); toast('Changed on the whole shot'); };
+  if ($('#propno')) $('#propno').onclick = () => { PROP = null; renderTake(t); };
   if ($('#repeat')) $('#repeat').onclick = () => {
     checkpoint('repeat');
     for (const k of ks) { t[k] = JSON.parse(JSON.stringify(t.sug[k])); if (F[k].list) markUsed(F[k].list, t[k]); delete t.sug[k]; }
@@ -565,6 +611,7 @@ function closePanel() { active = null; lastCk = ''; const p = $('#panel'); if (p
 const nextField = k => { const i = ORDER.indexOf(k); return ORDER.slice(i + 1).find(visible) || null; };
 
 function openPanel(t, k) {
+  if (panelStart && panelStart.tid === t.id && panelStart.k !== k) checkProp(t, panelStart.k);   // tapping another field also ends this one
   active = k; renderTake(t);
   if (k === 'take') panelTake(t);
   else if (F[k].kind === 'filters') panelFilters(t);
@@ -578,14 +625,24 @@ function fitPanel(k) {
   const el = document.querySelector(`#tp [data-f="${k}"]`);
   if (el) { const r = el.getBoundingClientRect(), limit = innerHeight - ph - 8; if (r.bottom > limit) scrollBy({ top: r.bottom - limit, behavior: 'smooth' }); else if (r.top < 52) scrollBy({ top: r.top - 60, behavior: 'smooth' }); }
 }
+let panelStart = null, PROP = null;
+const valOf = (t, k) => JSON.stringify(t[k] ?? '');
+function checkProp(t, k) {   // the value changed on this take: offer it to the other takes of the shot that had the old one
+  if (!panelStart || panelStart.tid !== t.id || panelStart.k !== k || ['notes', 'tc', 'desc'].includes(k)) return;
+  const old = panelStart.old; panelStart = null; if (old === valOf(t, k)) return;
+  const ref = { ...t, [k]: JSON.parse(old) };
+  const ids = S.takes.filter(x => x !== t && sameShot(x, ref) && valOf(x, k) === old).map(x => x.id);
+  PROP = ids.length ? { tid: t.id, k, ids } : null;
+}
 function panelShell(t, k, label, cur, body, empty, noNext) {
+  if (!panelStart || panelStart.tid !== t.id || panelStart.k !== k) panelStart = { tid: t.id, k, old: valOf(t, k) };
   $('#panel').innerHTML = `<div class="panel"><div class="p-head"><div style="flex:1;min-width:0"><div class="lbl">${h(label)}</div>
     <div class="cur ${empty ? 'empty-cur' : ''}" id="pcur">${h(cur)}</div></div>
     ${noNext ? '' : '<button class="pbtn" id="pnext">Next ›</button>'}<button class="pbtn done" id="pdone">Done</button></div>
     <div class="p-body">${body}</div></div>`;
   const keep = () => { if (k === 'stop') { markUsed('stops', t.stop); save(); } };   // only the final stop goes to Recent
-  $('#pdone').onclick = () => { keep(); closePanel(); renderTake(t); };
-  const n = $('#pnext'); if (n) n.onclick = () => { keep(); const nf = nextField(k); nf ? openPanel(t, nf) : (closePanel(), renderTake(t)); };
+  $('#pdone').onclick = () => { keep(); checkProp(t, k); closePanel(); renderTake(t); };
+  const n = $('#pnext'); if (n) n.onclick = () => { keep(); checkProp(t, k); const nf = nextField(k); nf ? openPanel(t, nf) : (closePanel(), renderTake(t)); };
 }
 function setVal(t, k, v) {
   checkpoint(F[k] ? F[k].label : k, t.id + '|' + k);
@@ -602,7 +659,7 @@ function panelValue(t, k) {
   if (s != null && !has(t, k)) top = `<button class="chip last" data-same>Last: ${h(show(k, s))}</button>`;
   if (k === 'notes') { const p = prevTake(t); if (p && p.notes && p.notes !== t.notes) top = `<button class="chip last" data-prevnote>= Take ${h(takeLabel(p))}: ${h(p.notes.slice(0, 40))}${p.notes.length > 40 ? '…' : ''}</button>`; }
   const chips = f.list ? S.lists[f.list].filter(v => v !== s).map(v => `<button class="chip ${v === t[k] ? 'on' : recentCls(f.list, v)}" data-v="${h(v)}">${h(show(k, v))}</button>`).join('') : '';
-  const range = f.range ? `<button class="chip" data-k="→">→ to (range)</button>${k === 'focus' ? '<button class="chip" data-k="∞">∞</button>' : ''}` : '';
+  const range = (f.range ? `<button class="chip" data-k="→">→ to (range)</button>${k === 'focus' ? '<button class="chip" data-k="∞">∞</button>' : ''}` : '') + (k === 'tc' ? '<button class="chip last" data-now>Now (phone clock)</button>' : '');
   let input = '';
   if (f.kind === 'text') input = `<input class="p-text" id="ptext" value="${h(t[k])}" placeholder="${h(f.ph || '')}" autocomplete="off" autocapitalize="off">`;
   if (f.kind === 'area') input = `<textarea class="p-text" id="ptext" placeholder="${h(f.ph || '')}">${h(t[k])}</textarea>`;
@@ -619,6 +676,7 @@ function panelValue(t, k) {
   p.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { markUsed(f.list, b.dataset.v); setVal(t, k, b.dataset.v); f.kind === 'text' ? panelValue(t, k) : after(); });
   const sm = p.querySelector('[data-same]'); if (sm) sm.onclick = () => { markUsed(f.list, s); setVal(t, k, s); after(); };
   const pn = p.querySelector('[data-prevnote]'); if (pn) pn.onclick = () => { setVal(t, 'notes', prevTake(t).notes); panelValue(t, k); };
+  const nw = p.querySelector('[data-now]'); if (nw) nw.onclick = () => { const d = new Date(), z = n => String(n).padStart(2, '0'); setVal(t, 'tc', `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}:00`); };
   const ti = $('#ptext');
   if (ti) {
     ti.oninput = () => setVal(t, k, ti.value.trim());
@@ -690,17 +748,24 @@ function panelTake(t) {   // type, circle, and the take and clip numbers by hand
   const num = (id, label, v, man) => `<div class="numrow"><span class="lbl">${label}</span><button class="x" data-step="${id}|-1" aria-label="${label} minus">−</button>
     <input id="${id}" inputmode="numeric" value="${v}"><button class="x" data-step="${id}|1" aria-label="${label} plus">+</button>
     ${man ? `<button class="pbtn" data-auto="${id}">Auto</button>` : '<span class="auto">auto</span>'}</div>`;
-  const body = `<div class="p-sub">What was this clip</div><div class="chips">${TYPES.map(([v, , en]) => `<button class="chip ${t.type === v ? 'on' : ''}" data-type="${v}">${h(en)}</button>`).join('')}</div>
+  const body = `<div class="p-sub">This clip is · only Take uses a number</div><div class="seg wrap">${TYPES.map(([v, , en]) => `<button class="${t.type === v ? 'on' : ''}" data-type="${v}">${h(en)}</button>`).join('')}</div>
+    ${t.type === 'Take' ? `<div class="p-sub">Marks · as many as needed, numbering stays</div><div class="chips">${TAGS.map(([k, , en]) => `<button class="chip ${(t.tags || []).includes(k) ? 'on' : ''}" data-tag="${k}">${h(en)}</button>`).join('')}</div>` : ''}
     <div class="p-sub">Circle</div><div class="chips"><button class="chip ${t.circled ? 'on' : ''}" id="circ2">${t.circled ? '● Circled' : 'Circle this take'}</button></div>
+    ${S.cameras.length > 1 ? `<div class="p-sub">Wrong camera?</div><div class="chips">${S.cameras.filter(c => c.l !== t.cam).map(c => `<button class="chip" data-move="${h(c.l)}">Move to Cam ${h(c.l)} · ${h(curRoll(c.l))}</button>`).join('')}</div>` : ''}
     <div class="p-sub">Numbers</div>${NO_NUMBER.includes(t.type) ? '' : num('tn', 'Take', takeNo(t), t.takeN)}${num('cn', 'Clip', clipNo(t), t.clipN)}
-    <p style="margin:8px 4px 0;font-size:13px;color:var(--muted)">Slate only and false start don't use a take number: changing one renumbers the takes after it. A number typed here holds, and the next ones count on from it.</p>`;
+    <p style="margin:8px 4px 0;font-size:13px;color:var(--muted)">Accidental roll (disparo), slate only and test are clips, not takes: they don't use a number, and changing one renumbers the takes after it. A number typed here holds, and the next ones count on from it.</p>`;
   panelShell(t, 'take', 'Take · Clip', `${takeLabel(t)} · ${pad3(clipNo(t))}`, body, false, true);
   const p = $('#panel'), again = () => { save(); renderTake(t); panelTake(t); fitPanel('take'); };
-  p.querySelectorAll('[data-type]').forEach(b => b.onclick = () => { checkpoint('take type'); t.type = b.dataset.type; again(); });
+  p.querySelectorAll('[data-type]').forEach(b => b.onclick = () => { checkpoint('clip type'); t.type = b.dataset.type; again(); });
+  p.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => { const k = b.dataset.tag; checkpoint('mark ' + k); const g = t.tags || [];
+    t.tags = g.includes(k) ? g.filter(x => x !== k) : [...g, k]; again(); });
   $('#circ2').onclick = () => { checkpoint(t.circled ? 'uncircle' : 'circle'); t.circled = !t.circled; again(); };
   const setN = (id, v) => { v = Math.max(1, Math.round(Number(v) || 0)); if (!v) return; checkpoint(id === 'tn' ? 'take number' : 'clip number'); if (id === 'tn') t.takeN = v; else t.clipN = v; again(); };
   p.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { const [id, d] = b.dataset.step.split('|'); setN(id, (id === 'tn' ? takeNo(t) : clipNo(t)) + Number(d)); });
   p.querySelectorAll('.numrow input').forEach(inp => inp.onchange = () => setN(inp.id, inp.value));
+  p.querySelectorAll('[data-move]').forEach(b => b.onclick = () => { const l = b.dataset.move; checkpoint(`move take to Cam ${l}`);
+    t.cam = l; t.roll = curRoll(l); delete t.clipN; delete t.takeN; if (!S.rolls.some(x => x.cam === l && x.roll === t.roll && x.date === t.date)) S.rolls.push({ cam: l, roll: t.roll, date: t.date });
+    save(); closePanel(); viewTake(t.id); toast(`Moved to Cam ${l} · ${t.roll}`); });
   p.querySelectorAll('[data-auto]').forEach(b => b.onclick = () => { checkpoint('auto number'); if (b.dataset.auto === 'tn') delete t.takeN; else delete t.clipN; again(); });
 }
 
@@ -848,11 +913,11 @@ function viewHelp() {
     <p><b>UNDO</b> (top) walks back your last changes, one at a time, until you close the app.</p>
     <p><b>Day page</b> = rolls and scenes. Newest on top; <b>↑ Newest / ↓ Oldest</b> next to Share day turns it around. Pick the camera at the top (or all of them); <b>⋮</b> next to them edits the cameras (color, format, defaults). <b>+ Roll</b> starts a card (the next number is
     suggested). Inside the roll, <b>+ Scene</b> starts a scene at shot 1. <b>Continue</b> (bottom) opens the last take.
-    Tap a take to open it, the details to read everything, <b>⋮</b> on a roll to rename, share or delete it.</p>
+    Tap a take to open it (touch and hold circles it), the details to read everything, <b>⋮</b> on a roll to rename, share or delete it.</p>
     <p><b>Day plan</b>: choose the call sheet PDF. The app finds the day's scenes (no AI, nothing leaves the phone); you confirm the list.
     Those scenes show first in <b>+ Scene</b>.</p>
     <p><b>Take page</b> = takes and shots. <b>+</b> on Scene, Shot and Take, and the big <b>+ Take</b> at the bottom (a copy of this take).
-    In Take · Clip, <b>‹ ›</b> walk through the roll; tap the number to mark slate only, false start, MOS… or type the take and clip numbers. <b>○</b> circles, the bin deletes (with Undo).</p>
+    In Take · Clip, <b>‹ ›</b> walk through the roll; tap the number to say what the clip is (take, accidental roll, slate only, test), add marks (no slate, end slate, MOS, pickup…) or type the take and clip numbers. <b>○</b> circles, the bin deletes (with Undo).</p>
     <p><b>+ Shot</b>: everything from the shot before comes in grey, camera settings too: nothing is saved without a tap.
     The yellow box lists the values; <b>Repeat all</b> keeps them (change the lens first, and Repeat fills the rest), or fill one by one.</p>
     <p><b>Focus, height, tilt</b>: <b>→</b> makes a range (5 → 2 m). <b>Filter</b>: type to search; Clear and Pola go in at once.</p>
@@ -879,7 +944,8 @@ function shareSheet(title, list) {
   });
 }
 const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-const csvTake = t => ({ Claquete: 'claquete', Disparo: 'disparo', Wild: 'wild', Test: 'test' })[t.type] || String(takeNo(t));
+const csvTake = t => ({ Claquete: 'slate only', Disparo: 'accidental roll', Test: 'test' })[t.type] || String(takeNo(t));
+const csvNotes = t => [tagsOf(t).map(x => x[2]).join(', '), t.notes].filter(Boolean).join(' — ');   // marks go first in the notes (no column for them)
 function exportCSV(list, fmt) {
   let cols, rowOf;
   if (fmt === 'zoelog') {   // ZoeLog's own column names: Silverstack has an importer for them (no Shot column there, so scene/shot go together)
@@ -887,12 +953,12 @@ function exportCSV(list, fmt) {
       'ISO', 'Time Code', 'Tilt', 'Lut', 'Description', 'Notes', 'Origin Date', 'Take Origin'];
     rowOf = t => [t.shot ? `${t.scene}/${t.shot}` : t.scene, t.date, t.cam, t.roll, csvTake(t), clipNo(t), t.circled ? 'true' : 'false', t.lens, fmtFilters(t.filters),
       t.stop && 'T' + stopDecimal(t.stop), t.focus, t.height, t.wb && t.wb + 'K', t.fps && t.fps + 'fps', t.shutter && t.shutter + ' degrees', t.iso && t.iso + 'EI',
-      t.tc, t.tilt, t.lut, t.desc, t.notes, t.created, t.created];
+      t.tc, t.tilt, t.lut, t.desc, csvNotes(t), t.created, t.created];
   } else {                  // ScriptE's names: Slate → Shot, Lens → Lens Name, Description → Shot Descriptors, Notes → Comment
     cols = ['Scene', 'Slate', 'Take', 'Camera', 'Roll', 'Clip', 'Circled', 'Lens', 'Stop', 'Filters', 'Focus', 'Lens Height', 'Color Temp', 'ISO', 'FPS', 'Shutter',
       'Timecode', 'Start Time', 'Description', 'Notes'];
     rowOf = t => [t.scene, t.shot, csvTake(t), t.cam, t.roll, clipNo(t), t.circled ? 'true' : 'false', t.lens, stopDecimal(t.stop), fmtFilters(t.filters), t.focus, t.height,
-      t.wb, t.iso, t.fps, t.shutter, t.tc, t.created, t.desc, t.notes];
+      t.wb, t.iso, t.fps, t.shutter, t.tc, t.created, t.desc, csvNotes(t)];
   }
   const lines = [cols.map(q).join(','), ...list.map(t => rowOf(t).map(q).join(','))];
   const rolls = [...new Set(list.map(t => t.cam + t.roll))];
