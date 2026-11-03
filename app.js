@@ -115,7 +115,7 @@ function undo() {
   const c = HIST.pop(); if (!c) return toast('Nothing to undo');
   S = JSON.parse(c.s); lastCk = ''; save(); applyTheme(); closeSheet(); route(true); toast('Undone: ' + c.label);
 }
-const undoBtn = () => `<button class="nav undo" id="undo" ${HIST.length ? '' : 'disabled'} aria-label="Undo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 7"></path></svg><span>UNDO</span></button>`;
+const undoBtn = () => `<button class="nav undo" id="undo" ${HIST.length ? '' : 'disabled'} aria-label="Undo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg><span>Undo</span></button>`;
 function applyTheme() { document.documentElement.dataset.theme = S.theme; document.querySelector('meta[name=theme-color]').content = S.theme === 'light' ? '#FFFFFF' : '#0A0A0B'; }
 
 /* ---------- lists keep their own order (ascending, as in Setup); the last one used is marked, not moved ---------- */
@@ -306,7 +306,7 @@ function viewDay() {
       <div><div class="lbl">Date</div><div class="datebar"><button id="dprev" ${di > 0 ? '' : 'disabled'} aria-label="Previous day">‹</button>
         <span class="v">${h(dmy(S.viewDate))}</span><button id="dnext" ${di < ds.length - 1 ? '' : 'disabled'} aria-label="Next day">›</button></div></div></div>
     <div class="daybar"><button class="pbtn" id="plan">${plan ? `Day plan · ${plan.scenes.length} scene${plan.scenes.length === 1 ? '' : 's'}` : '+ Day plan (call sheet)'}</button>
-      <button class="pbtn" id="shareday">Share day</button></div>
+      <span><button class="pbtn" id="order" aria-label="List order">${S.newestFirst ? '↑ Newest' : '↓ Oldest'}</button><button class="pbtn" id="shareday">Share day</button></span></div>
     <div class="camsw">${S.cameras.map(c => `<button data-cam="${h(c.l)}" class="${S.camera === c.l ? 'on' : ''}" style="${S.camera === c.l ? 'background:' + c.color + ';color:' + ink(c.color) : '--cc:' + c.color}">Cam ${h(c.l)}</button>`).join('')}
       <button data-cam="" class="${S.camera ? '' : 'on all'}">${S.cameras.map(c => c.l).join(' + ')}</button>
       <button class="camedit" id="camedit" aria-label="Edit cameras">⋮</button></div>
@@ -324,6 +324,7 @@ function viewDay() {
   $('#camedit').onclick = () => cameraSheet(S.camera || S.cameras[0].l);
   $('#undo').onclick = undo;
   $('#plan').onclick = () => go('plan');
+  $('#order').onclick = () => { S.newestFirst = !S.newestFirst; save(); viewDay(); toast(S.newestFirst ? 'Newest on top' : 'Oldest on top'); };
   $('#shareday').onclick = () => shareSheet('Day ' + dmy(S.viewDate), S.takes.filter(t => t.date === S.viewDate));
   $('#dprev').onclick = () => { if (di > 0) { S.viewDate = ds[di - 1]; viewDay(); } };
   $('#dnext').onclick = () => { if (di < ds.length - 1) { S.viewDate = ds[di + 1]; viewDay(); } };
@@ -812,8 +813,10 @@ function viewSetup() {
     <label class="field"><span>Project</span><input id="pname" value="${h(S.project)}"></label>
     <div class="field"><span>Look</span><div class="seg" id="theme"><button data-v="dark" class="${S.theme !== 'light' ? 'on' : ''}">Night (ShotSize)</button><button data-v="light" class="${S.theme === 'light' ? 'on' : ''}">Day (paper)</button></div></div>
     <div class="field"><span>Cameras · letter, color, format, defaults for a new scene</span>
-      <button class="btn" id="cams" style="width:100%">${S.cameras.map(c => `<b style="color:${c.color}">${h(c.l)}</b>`).join(' · ')} · Edit cameras</button></div>
-    <div class="field"><span>Lists on the day page</span><div class="seg" id="order"><button data-v="1" class="${S.newestFirst ? 'on' : ''}">Newest on top</button><button data-v="0" class="${S.newestFirst ? '' : 'on'}">Oldest on top</button></div></div>
+      <div class="camcards">${S.cameras.map(c => `<button class="camcard2" data-cedit="${h(c.l)}"><span class="cl" style="background:${c.color};color:${ink(c.color)}">${h(c.l)}</span>
+        <span class="ci"><b>${h(c.format || 'No format yet')}</b><small>${h(CAMSET.map(k => show(k, c[k]) || '—').join(' · '))}</small></span><span class="ce">Edit ›</span></button>`).join('')}
+        <button class="addbtn" data-cedit="+">+ Camera</button></div></div>
+
     <div class="field"><span>A new scene starts at shot</span><div class="seg" id="shotstart"><button data-v="1" class="${S.shotStart !== 'A' ? 'on' : ''}">1</button><button data-v="A" class="${S.shotStart === 'A' ? 'on' : ''}">A</button></div></div>
     <div class="field"><span>Fields on the take page</span><div class="checks">${HIDEABLE.map(k => `<button class="chip ${visible(k) ? 'on' : ''}" data-hide="${k}">${F[k].label}</button>`).join('')}</div></div>
     <label class="field"><span>Filter families · "Family: strengths" one per line (no strengths = goes in at once)</span><textarea id="fams" style="min-height:180px">${h(famText)}</textarea></label>
@@ -823,8 +826,11 @@ function viewSetup() {
   $('#pname').oninput = ev => { S.project = ev.target.value || 'Untitled project'; save(); };
   $('#theme').querySelectorAll('button').forEach(b => b.onclick = () => { S.theme = b.dataset.v; save(); applyTheme(); viewSetup(); });
   $('#shotstart').querySelectorAll('button').forEach(b => b.onclick = () => { S.shotStart = b.dataset.v; save(); viewSetup(); });
-  $('#cams').onclick = () => cameraSheet(S.camera || S.cameras[0].l);
-  $('#order').querySelectorAll('button').forEach(b => b.onclick = () => { S.newestFirst = b.dataset.v === '1'; save(); viewSetup(); });
+  document.querySelectorAll('[data-cedit]').forEach(b => b.onclick = () => {
+    if (b.dataset.cedit !== '+') return cameraSheet(b.dataset.cedit);
+    checkpoint('add camera'); const used = S.cameras.map(x => x.l), nl = 'ABCDEFGHIJ'.split('').find(x => !used.includes(x)) || 'X', c0 = S.cameras[0] || {};
+    S.cameras.push({ l: nl, color: PALETTE[S.cameras.length % PALETTE.length], format: '', fps: c0.fps || '24', shutter: c0.shutter || '180', wb: c0.wb || '5600', iso: c0.iso || '800' }); save(); cameraSheet(nl);
+  });
   document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => { const k = b.dataset.hide; S.hidden = visible(k) ? [...S.hidden, k] : S.hidden.filter(x => x !== k); save(); viewSetup(); });
   $('#fams').onchange = ev => {
     const fams = {};
@@ -840,7 +846,7 @@ function viewHelp() {
   $('#app').innerHTML = `<header class="top"><button class="nav l" onclick="go('')">‹ Day</button><h1>How it works</h1><span></span></header>
     <main class="help">
     <p><b>UNDO</b> (top) walks back your last changes, one at a time, until you close the app.</p>
-    <p><b>Day page</b> = rolls and scenes. Newest on top (Setup can turn it around). Pick the camera at the top (or all of them); <b>⋮</b> next to them edits the cameras (color, format, defaults). <b>+ Roll</b> starts a card (the next number is
+    <p><b>Day page</b> = rolls and scenes. Newest on top; <b>↑ Newest / ↓ Oldest</b> next to Share day turns it around. Pick the camera at the top (or all of them); <b>⋮</b> next to them edits the cameras (color, format, defaults). <b>+ Roll</b> starts a card (the next number is
     suggested). Inside the roll, <b>+ Scene</b> starts a scene at shot 1. <b>Continue</b> (bottom) opens the last take.
     Tap a take to open it, the details to read everything, <b>⋮</b> on a roll to rename, share or delete it.</p>
     <p><b>Day plan</b>: choose the call sheet PDF. The app finds the day's scenes (no AI, nothing leaves the phone); you confirm the list.
